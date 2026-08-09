@@ -1,0 +1,42 @@
+name: Design proposal
+description: Propose a protocol, resource-model, security, or architecture decision.
+title: "design: "
+labels: [design]
+body:
+  - type: markdown
+    attributes:
+      value: Please support claims with primary standards or provider documentation.
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Outcome
+      description: What observable Agent communication capability should exist?
+    validations:
+      required: true
+  - type: textarea
+    id: model
+    attributes:
+      label: Resource and responsibility model
+      description: Identify ownership, identity, lifecycle, and system boundaries.
+    validations:
+      required: true
+  - type: textarea
+    id: standards
+    attributes:
+      label: Existing standards
+      description: Which existing standards apply, and where are they insufficient?
+    validations:
+      required: true
+  - type: textarea
+    id: security
+    attributes:
+      label: Security, privacy, and abuse impact
+    validations:
+      required: true
+  - type: textarea
+    id: compatibility
+    attributes:
+      label: Compatibility and retirement
+      description: How will this evolve, migrate, or become unnecessary?
+    validations:
+      required: true

@@ -1,0 +1,46 @@
+name: Transport proposal
+description: Assess a communication platform as an Inbox Transport.
+title: "transport: "
+labels: [transport]
+body:
+  - type: input
+    id: platform
+    attributes:
+      label: Platform
+    validations:
+      required: true
+  - type: textarea
+    id: identity
+    attributes:
+      label: Native identity model
+      description: Can every Realmroot Agent appear as a distinct native identity?
+    validations:
+      required: true
+  - type: textarea
+    id: ingress
+    attributes:
+      label: Inbound delivery
+      description: Events, verification, retries, dedupe, and lifecycle.
+    validations:
+      required: true
+  - type: textarea
+    id: egress
+    attributes:
+      label: Outbound delivery
+      description: Permissions, identity attribution, delivery state, and limits.
+    validations:
+      required: true
+  - type: textarea
+    id: mapping
+    attributes:
+      label: Mailbox mapping
+      description: Message, conversation, attachment, and delivery mapping.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Primary sources
+      description: Link official specifications and provider documentation.
+    validations:
+      required: true
