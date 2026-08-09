@@ -1,4 +1,5 @@
 import type { AgentPrincipal } from './auth'
+import type { AgentDirectory, AgentIdentity } from './agent-directory'
 import type { CreateMessageInput, UpdateMailboxInput, UpdateMessageInput } from '../shared/contracts'
 import { conflict, forbidden, notFound, preconditionFailed, preconditionRequired } from './errors'
 
@@ -78,18 +79,22 @@ export interface MessageRepresentation {
 }
 
 export async function getOrCreateMailbox(db: D1Database, principal: AgentPrincipal, emailDomain: string) {
-  const id = `mbx_${await digest(`${principal.agent.issuer}\n${principal.agent.subject}`, 32)}`
+  return getOrCreateMailboxForAgent(db, principal.agent, emailDomain)
+}
+
+export async function getOrCreateMailboxForAgent(db: D1Database, agent: AgentIdentity, emailDomain: string) {
+  const id = `mbx_${await digest(`${agent.issuer}\n${agent.subject}`, 32)}`
   const now = new Date().toISOString()
-  const local = /^[a-z0-9](?:[a-z0-9._-]{0,62}[a-z0-9])?$/i.test(principal.agent.subject)
-    ? principal.agent.subject.toLowerCase()
-    : `agt-${await digest(principal.agent.subject, 24)}`
+  const local = /^[a-z0-9](?:[a-z0-9._-]{0,62}[a-z0-9])?$/i.test(agent.subject)
+    ? agent.subject.toLowerCase()
+    : `agt-${await digest(agent.subject, 24)}`
   await db.prepare(`
     INSERT OR IGNORE INTO mailbox
       (id, agent_issuer, agent_subject, stable_address, created_at, updated_at)
     VALUES (?, ?, ?, ?, ?, ?)
-  `).bind(id, principal.agent.issuer, principal.agent.subject, `${local}@${emailDomain}`.toLowerCase(), now, now).run()
+  `).bind(id, agent.issuer, agent.subject, `${local}@${emailDomain}`.toLowerCase(), now, now).run()
   const row = await db.prepare('SELECT * FROM mailbox WHERE agent_issuer = ? AND agent_subject = ?')
-    .bind(principal.agent.issuer, principal.agent.subject).first<MailboxRow>()
+    .bind(agent.issuer, agent.subject).first<MailboxRow>()
   if (!row) throw new Error('Mailbox provisioning did not produce a mailbox.')
   return mailbox(row)
 }
@@ -136,6 +141,8 @@ export async function createMessage(
   origin: string,
   input: CreateMessageInput,
   idempotencyKey: string,
+  agentDirectory: AgentDirectory,
+  emailDomain: string,
 ) {
   const requestHash = await digest(JSON.stringify(input), 64)
   const id = `msg_${await digest(`${sender.id}\n${idempotencyKey}`, 32)}`
@@ -150,8 +157,12 @@ export async function createMessage(
   const recipientSubjects = [...new Set(input.recipients.map((address) => address.slice('agent:'.length)))]
   const recipients: Mailbox[] = []
   for (const subject of recipientSubjects) {
-    const recipient = await mailboxByAgent(db, principal.agent.issuer, subject)
-    if (!recipient) throw notFound(`Recipient agent:${subject} has no mailbox.`)
+    let recipient = await mailboxByAgent(db, principal.agent.issuer, subject)
+    if (!recipient) {
+      const identity = await agentDirectory.find(principal.agent.issuer, subject)
+      if (!identity) throw notFound(`Recipient agent:${subject} does not exist.`)
+      recipient = await getOrCreateMailboxForAgent(db, identity, emailDomain)
+    }
     recipients.push(recipient)
   }
   const now = new Date().toISOString()

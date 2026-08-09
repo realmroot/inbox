@@ -3,6 +3,7 @@ import { bodyLimit } from 'hono/body-limit'
 import { cors } from 'hono/cors'
 import { secureHeaders } from 'hono/secure-headers'
 import { authenticateAgent, type AgentPrincipal, type Authenticator } from './auth'
+import { createRealmrootAgentDirectory, type AgentDirectory } from './agent-directory'
 import { ApiError, badRequest } from './errors'
 import { openApi } from './openapi'
 import { metadataPath, metadataUrl, protectedResourceMetadata } from './protected-resource'
@@ -32,7 +33,10 @@ type AppEnv = {
   Variables: { requestId: string; principal: AgentPrincipal }
 }
 
-export function createApp(authenticate: Authenticator = authenticateAgent) {
+export function createApp(
+  authenticate: Authenticator = authenticateAgent,
+  agentDirectory: (env: Cloudflare.Env) => AgentDirectory = (env) => createRealmrootAgentDirectory(env.REALMROOT),
+) {
   const app = new Hono<AppEnv>()
 
   app.use('*', async (c, next) => {
@@ -107,7 +111,16 @@ export function createApp(authenticate: Authenticator = authenticateAgent) {
     if (!key || key.length < 8 || key.length > 200) throw badRequest('Idempotency-Key must contain 8 to 200 characters.')
     const input = await parseJson(c, createMessageSchema)
     const mailbox = await currentMailbox(c)
-    const result = await createMessage(c.env.DB, mailbox, c.get('principal'), c.env.APP_ORIGIN, input, key)
+    const result = await createMessage(
+      c.env.DB,
+      mailbox,
+      c.get('principal'),
+      c.env.APP_ORIGIN,
+      input,
+      key,
+      agentDirectory(c.env),
+      c.env.EMAIL_DOMAIN,
+    )
     c.header('Location', `${c.env.APP_ORIGIN}/api/messages/${result.message.id}`)
     c.header('Idempotency-Replayed', result.replayed ? 'true' : 'false')
     return c.json(result.message, result.replayed ? 200 : 201)

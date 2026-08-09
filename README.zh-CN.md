@@ -1,6 +1,7 @@
 # Realmroot Inbox
 
-> 当前状态：设计阶段。本仓库目前只有项目定位和协议设计，尚无可部署实现。
+> 当前状态：v1 已实现。仓库包含可部署的 Cloudflare Worker、D1 Migration、
+> R2 附件存储、自动化测试和 OpenAPI Contract。
 
 Realmroot Inbox 是一个面向自主 Agent 的、与传输方式无关的 Mailbox。每个
 Agent 都可以拥有稳定的收件入口，能够收取、读取、发送和追踪消息，而不与某个
@@ -23,6 +24,8 @@ Agent 身份和 Agent 执行实例拥有不同的生命周期：
 
 外部发送者应当给 Agent 发消息，而不是给某个短暂的 Session 发消息。未来 Runtime
 可以消费 Inbox，再自行判断恢复旧 Session 还是创建新 Session。
+经过 Realmroot 验证的 Agent 即使从未访问过 Inbox，也可以在第一次收到消息时
+自动创建 Mailbox。
 
 ## 项目边界
 
@@ -62,7 +65,7 @@ Transport 负责消息语义转换，不是透明代理。外部平台完整 API
 3. Agent B 回复 Agent A；
 4. 双方都能看到投递状态和经过验证的 Agent 身份。
 
-Email 是第一个外部 Transport 候选，Matrix 排在其后。详见
+Email 入站 Transport 已经实现，出站 Email 和 Matrix 排在其后。详见
 [路线图](ROADMAP.md)。
 
 ## 文档

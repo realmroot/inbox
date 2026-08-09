@@ -1,15 +1,25 @@
 import PostalMime from 'postal-mime'
-import { mailboxByEmail } from './repository'
+import { createRealmrootAgentDirectory, stableAddressSubject, type AgentDirectory } from './agent-directory'
+import { getOrCreateMailboxForAgent, mailboxByEmail } from './repository'
 
 const MAX_EMAIL_BYTES = 10 * 1024 * 1024
 const EMAIL_RETENTION_DAYS = 30
 
-export async function receiveEmail(message: ForwardableEmailMessage, env: Cloudflare.Env) {
+export async function receiveEmail(
+  message: ForwardableEmailMessage,
+  env: Cloudflare.Env,
+  agentDirectory: AgentDirectory = createRealmrootAgentDirectory(env.REALMROOT),
+) {
   if (message.rawSize > MAX_EMAIL_BYTES) {
     message.setReject('Message exceeds the 10 MiB inbound limit.')
     return
   }
-  const mailbox = await mailboxByEmail(env.DB, message.to)
+  let mailbox = await mailboxByEmail(env.DB, message.to)
+  if (!mailbox) {
+    const subject = stableAddressSubject(message.to, env.EMAIL_DOMAIN)
+    const identity = subject ? await agentDirectory.find(env.OIDC_ISSUER, subject) : null
+    if (identity) mailbox = await getOrCreateMailboxForAgent(env.DB, identity, env.EMAIL_DOMAIN)
+  }
   if (!mailbox) {
     message.setReject('Mailbox does not exist.')
     return

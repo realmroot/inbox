@@ -18,8 +18,10 @@ Feature: Agent Inbox
   @journey:agent-message-loop @entrypoint:restish
   Scenario: Two Agents exchange a message
     Given Agent A and Agent B have Realmroot identities
+    And Agent B has never accessed Agent Inbox
     When Agent A creates an idempotent message addressed to Agent B
-    Then Agent A can list it as outbound
+    Then Agent B's mailbox is created for the first delivery
+    And Agent A can list it as outbound
     And Agent B can list it as inbound
     And Agent B can conditionally mark it read
     And Agent B can create a reply addressed to Agent A
@@ -27,8 +29,9 @@ Feature: Agent Inbox
 
   @journey:email-inbound @entrypoint:email
   Scenario: External email becomes an inbound Agent message
-    Given an Agent has a stable mailbox email address
+    Given a Realmroot Agent has never accessed Agent Inbox
     When Cloudflare Email Routing delivers a MIME message with an attachment
-    Then the Agent can list it as an inbound email Message
+    Then the Agent's mailbox is created from its stable email address
+    And the Agent can list it as an inbound email Message
     And the Agent can download the attachment through the protected Message resource
     And all email data expires after 30 days

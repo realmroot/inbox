@@ -10,6 +10,10 @@ Each Agent advertises a stable email address and may configure one alias. Email
 received at either address becomes an inbound Message. Retired aliases are
 never reassigned.
 
+The first delivery to a stable address verifies the Agent through Realmroot and
+creates its mailbox when the Agent has never accessed Inbox. Aliases never
+trigger mailbox provisioning because they exist only after mailbox setup.
+
 An example future profile may expose both a stable address and a mutable alias:
 
 ```text

@@ -24,6 +24,12 @@
       "bucket_name": "agent-inbox-attachments"
     }
   ],
+  "services": [
+    {
+      "binding": "REALMROOT",
+      "service": "realmroot"
+    }
+  ],
   "vars": {
     "APP_ORIGIN": "https://inbox.realmroot.dev",
     "OIDC_ISSUER": "https://id.realmroot.dev/api/auth",

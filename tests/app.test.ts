@@ -2,6 +2,7 @@ import { env } from 'cloudflare:test'
 import { describe, expect, it } from 'vitest'
 import { createApp } from '../server/app'
 import type { Authenticator } from '../server/auth'
+import type { AgentDirectory } from '../server/agent-directory'
 import { receiveEmail } from '../server/email'
 import { API_VERSION } from '../shared/contracts'
 
@@ -15,7 +16,11 @@ const authenticate: Authenticator = async (request, runtimeEnv) => {
   }
 }
 
-const app = createApp(authenticate)
+const knownAgents = new Set(['agt_alpha', 'agt_beta', 'agt_email'])
+const agentDirectory: AgentDirectory = {
+  find: async (issuer, subject) => knownAgents.has(subject) ? { issuer, subject } : null,
+}
+const app = createApp(authenticate, () => agentDirectory)
 const headers = (agent: string, extra: HeadersInit = {}) => ({
   'API-Version': API_VERSION,
   'x-test-agent': agent,
@@ -72,7 +77,7 @@ describe('Agent Inbox API', () => {
   })
 
   it('sends, receives, filters, reads, and idempotently replays one message [spec: inbox/agent-message-loop]', async () => {
-    await app.request('https://inbox.test/api/mailbox', { headers: headers('agt_beta') }, env)
+    expect(await env.DB.prepare("SELECT id FROM mailbox WHERE agent_subject = 'agt_beta'").first()).toBeNull()
     const createRequest = {
       method: 'POST',
       headers: headers('agt_alpha', { 'Content-Type': 'application/json', 'Idempotency-Key': 'test-message-0001' }),
@@ -83,6 +88,7 @@ describe('Agent Inbox API', () => {
     const sent = await created.json<{ id: string; direction: string; recipients: Array<{ deliveryStatus: string }> }>()
     expect(sent).toMatchObject({ direction: 'outbound' })
     expect(sent.recipients[0]?.deliveryStatus).toBe('delivered')
+    expect(await env.DB.prepare("SELECT id FROM mailbox WHERE agent_subject = 'agt_beta'").first()).not.toBeNull()
 
     const replay = await app.request('https://inbox.test/api/messages', createRequest, env)
     expect(replay.status).toBe(200)
@@ -118,6 +124,18 @@ describe('Agent Inbox API', () => {
     })
   })
 
+  it('uses the production Realmroot service binding to provision a first-delivery mailbox', async () => {
+    const productionApp = createApp(authenticate)
+    const response = await productionApp.request('https://inbox.test/api/messages', {
+      method: 'POST',
+      headers: headers('agt_alpha', { 'Content-Type': 'application/json', 'Idempotency-Key': 'wired-message-0001' }),
+      body: JSON.stringify({ recipients: ['agent:agt_wired'], content: { text: 'First delivery' } }),
+    }, env)
+
+    expect(response.status).toBe(201)
+    expect(await env.DB.prepare("SELECT id FROM mailbox WHERE agent_subject = 'agt_wired'").first()).not.toBeNull()
+  })
+
   it('requires API version, idempotency, and conditional state writes', async () => {
     const missingVersion = await app.request('https://inbox.test/api/messages', {
       headers: { 'x-test-agent': 'agt_alpha', 'Request-Id': 'caller-controlled' },
@@ -131,10 +149,17 @@ describe('Agent Inbox API', () => {
       body: JSON.stringify({ recipients: ['agent:agt_beta'], content: { text: 'Ping' } }),
     }, env)
     expect(missingKey.status).toBe(400)
+
+    const unknownRecipient = await app.request('https://inbox.test/api/messages', {
+      method: 'POST', headers: headers('agt_alpha', { 'Content-Type': 'application/json', 'Idempotency-Key': 'unknown-agent-0001' }),
+      body: JSON.stringify({ recipients: ['agent:agt_missing'], content: { text: 'Ping' } }),
+    }, env)
+    expect(unknownRecipient.status).toBe(404)
+    expect(await env.DB.prepare("SELECT id FROM mailbox WHERE agent_subject = 'agt_missing'").first()).toBeNull()
   })
 
   it('accepts inbound Email Routing messages and protects their attachments [spec: inbox/email-inbound]', async () => {
-    await app.request('https://inbox.test/api/mailbox', { headers: headers('agt_email') }, env)
+    expect(await env.DB.prepare("SELECT id FROM mailbox WHERE agent_subject = 'agt_email'").first()).toBeNull()
     const raw = [
       'From: Human <human@example.com>',
       'To: agt_email@agents.test',
@@ -167,7 +192,8 @@ describe('Agent Inbox API', () => {
       forward: async () => ({ messageId: 'unused' }),
       reply: async () => ({ messageId: 'unused' }),
     }
-    await receiveEmail(routed, env)
+    await receiveEmail(routed, env, agentDirectory)
+    expect(await env.DB.prepare("SELECT id FROM mailbox WHERE agent_subject = 'agt_email'").first()).not.toBeNull()
 
     const inbox = await app.request('https://inbox.test/api/messages?direction=inbound', { headers: headers('agt_email') }, env)
     const result = await inbox.json<{ items: Array<{ id: string; transport: string; sender: { address: string }; attachments: Array<{ id: string }> }> }>()

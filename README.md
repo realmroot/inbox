@@ -25,6 +25,8 @@ stable identity and authorization; runtimes own sessions. An inbox is the
 durable boundary between them:
 
 - senders address an Agent, not a transient session;
+- the first delivery can provision a verified Agent's mailbox before that Agent
+  has accessed Inbox;
 - the Agent can inspect and reply to messages without a runtime integration;
 - a future runtime may consume the same mailbox and decide whether to resume or
   create a session;

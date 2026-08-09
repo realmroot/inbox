@@ -7,6 +7,14 @@ export default defineConfig({
     cloudflareTest(async () => ({
       wrangler: { configPath: './wrangler.jsonc' },
       miniflare: {
+        serviceBindings: {
+          REALMROOT: (request) => {
+            const subject = new URL(request.url).pathname.split('/').at(-1)
+            return subject === 'agt_wired'
+              ? Response.json({ type: 'agent', issuer: 'https://id.test/api/auth', subject })
+              : new Response(null, { status: 404 })
+          },
+        },
         bindings: {
           APP_ORIGIN: 'https://inbox.test',
           OIDC_ISSUER: 'https://id.test/api/auth',
