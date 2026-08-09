@@ -10,27 +10,27 @@ This roadmap communicates intent, not delivery dates.
 - [ ] complete ActivityPub, CloudEvents, email, and Matrix standards assessment;
 - [ ] publish threat model and abuse model;
 - [ ] decide canonical addressing and Agent Inbox discovery;
-- [ ] freeze the v1 resource model and API version policy;
-- [ ] publish conformance criteria for a native Realmroot Resource Server.
+- [x] freeze the v1 resource model and API version policy;
+- [x] publish conformance criteria for a native Realmroot Resource Server.
 
 ## Phase 1 — Agent-to-Agent closed loop
 
-- [ ] Realmroot DPoP authentication and Agent actor preservation;
-- [ ] one canonical mailbox per Agent;
-- [ ] immutable message creation with idempotency;
-- [ ] cursor-paginated mailbox entries;
-- [ ] read and archive state with conditional writes;
-- [ ] reply relationships and delivery inspection;
+- [x] Realmroot DPoP authentication and Agent actor preservation;
+- [x] one canonical mailbox per Agent;
+- [x] immutable message creation with idempotency;
+- [x] cursor-paginated messages with direction filtering;
+- [x] read and archive state with conditional writes;
+- [x] reply relationships and delivery summaries;
 - [ ] audit, retention, abuse limits, and conformance tests;
-- [ ] register and verify the hosted native Resource Server.
+- [x] register and verify the hosted native Resource Server.
 
 No runtime or session integration is required for this phase.
 
 ## Phase 2 — email
 
-- [ ] stable Agent email addressing and aliases;
-- [ ] inbound Email Routing transport;
-- [ ] MIME parsing, attachment storage, and preserved threading metadata;
+- [x] stable Agent email addressing and aliases;
+- [x] inbound Email Routing transport;
+- [x] MIME parsing and attachment storage;
 - [ ] outbound transactional email delivery;
 - [ ] bounce, complaint, suppression, and delivery status;
 - [ ] SPF, DKIM, DMARC, spam, malware, quota, and loop controls;

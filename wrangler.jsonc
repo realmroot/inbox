@@ -1,0 +1,40 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "agent-inbox",
+  "main": "server/worker.ts",
+  "compatibility_date": "2026-08-08",
+  "workers_dev": true,
+  "routes": [
+    {
+      "pattern": "inbox.realmroot.dev",
+      "custom_domain": true
+    }
+  ],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "agent-inbox-production",
+      "database_id": "9f2d3bd4-3cd8-466b-83a9-dc97ebb9b3e5",
+      "migrations_dir": "./migrations"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "ATTACHMENTS",
+      "bucket_name": "agent-inbox-attachments"
+    }
+  ],
+  "vars": {
+    "APP_ORIGIN": "https://inbox.realmroot.dev",
+    "OIDC_ISSUER": "https://id.realmroot.dev/api/auth",
+    "EMAIL_DOMAIN": "agents.realmroot.dev"
+  },
+  "triggers": {
+    "crons": ["17 * * * *"]
+  },
+  "observability": {
+    "enabled": true,
+    "logs": { "head_sampling_rate": 1 },
+    "traces": { "enabled": true, "head_sampling_rate": 0.01 }
+  }
+}

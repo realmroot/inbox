@@ -1,7 +1,7 @@
 # Realmroot Inbox
 
-> Status: design phase. This repository currently contains the project charter
-> and protocol design only; no deployable service exists yet.
+> Status: v1 implementation. The repository contains a deployable Cloudflare
+> Worker, D1 migrations, R2 attachment storage, tests, and an OpenAPI contract.
 
 Realmroot Inbox is a transport-neutral mailbox for autonomous Agents. It gives
 every Agent a stable place to receive, read, send, and track messages without
@@ -38,7 +38,7 @@ Server**, deployed independently from the Realmroot identity service.
 
 It will own:
 
-- mailboxes, immutable messages, per-recipient entries, conversations,
+- mailboxes, immutable message content, mailbox-local message state,
   attachments, deliveries, and transport routing;
 - reliable acceptance, idempotency, delivery state, acknowledgement, retry,
   retention, and audit;
@@ -74,17 +74,41 @@ API proxies. Transparent API compatibility remains the responsibility of the
 The first implementation milestone will deliberately avoid external runtimes:
 
 1. Agent A creates a message addressed to Agent B.
-2. Agent B lists its mailbox entries and reads the message.
+2. Agent B lists inbound messages and reads the message.
 3. Agent B creates a reply addressed to Agent A.
 4. Both sides can inspect delivery state and authenticated sender identity.
 
-Email is planned as the first external transport, followed by Matrix. See the
-[roadmap](ROADMAP.md).
+Inbound Email Routing is the first external transport. Outbound email and
+Matrix remain later work. See the [roadmap](ROADMAP.md).
+
+## API and Restish
+
+The protected resource is `https://inbox.realmroot.dev/api`. Its public
+discovery surface includes RFC 9728 metadata and an OpenAPI `service-desc` link.
+
+```bash
+restish api connect agent-inbox https://inbox.realmroot.dev/api --replace --yes
+restish api set agent-inbox 'command_layout: tags'
+restish agent-inbox mailbox show 2026-08-09
+restish agent-inbox message list 2026-08-09 --direction inbound
+restish agent-inbox message send 2026-08-09 message-0001 \
+  '{"recipients":["agent:agt_example"],"content":{"text":"Hello"}}'
+```
+
+## Development
+
+```bash
+pnpm install
+pnpm db:migrate
+pnpm check
+pnpm dev
+```
 
 ## Protocol direction
 
-The public contract is not finalized. Before introducing Realmroot-specific
-wire formats, the project will assess and reuse applicable standards, including:
+The v1 public contract is versioned but remains open to additive evolution. The
+project assesses and reuses applicable standards before introducing
+Realmroot-specific wire formats, including:
 
 - OAuth Protected Resource Metadata ([RFC 9728](https://www.rfc-editor.org/rfc/rfc9728));
 - OAuth DPoP ([RFC 9449](https://www.rfc-editor.org/rfc/rfc9449));
@@ -110,9 +134,8 @@ The standards assessment and current decisions live in
 
 ## Contributing
 
-The project is currently accepting design feedback, standards research, threat
-models, and transport proposals. Implementation PRs should wait until the
-initial resource and protocol decisions are accepted. Read
+The project accepts implementation changes, design feedback, standards
+research, threat models, and transport proposals. Read
 [CONTRIBUTING.md](CONTRIBUTING.md) before opening a proposal.
 
 ## License

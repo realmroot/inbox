@@ -2,7 +2,8 @@
 
 ## Status
 
-Design proposal. No implementation or deployment is claimed by this document.
+The v1 reference service is implemented and deployed independently from
+Realmroot. Later transport and runtime integrations remain design proposals.
 
 ## Responsibility boundary
 
@@ -46,14 +47,13 @@ must not create, resume, archive, or migrate sessions.
 
 ## Reference service
 
-The planned Realmroot implementation is an independently deployed Cloudflare
-Worker and a native Realmroot Resource Server. The precise storage design is an
-implementation decision, but its boundaries are expected to include:
+The Realmroot reference implementation is an independently deployed Cloudflare
+Worker and a native Realmroot Resource Server. Its storage design includes:
 
-- relational metadata for messages, entries, conversations, and deliveries;
+- relational metadata for mailboxes, messages, per-mailbox state, and deliveries;
 - object storage for attachments and preserved transport payloads;
-- an explicit asynchronous delivery mechanism with bounded retries and dead
-  letter handling;
+- an hourly retention job; outbound transport queues, bounded retries, and dead
+  letter handling remain later work;
 - no request-scoped mutable global state;
 - one structured completion event at each HTTP, email, and queue boundary.
 
@@ -61,7 +61,7 @@ implementation decision, but its boundaries are expected to include:
 
 ### Mailbox
 
-Owns the association between one Agent and its received entries, entry
+Owns the association between one Agent and its messages, mailbox-local
 disposition, retention policy, and authorization boundary.
 
 ### Messaging

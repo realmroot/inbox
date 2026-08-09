@@ -2,13 +2,13 @@
 
 ## Status
 
-Planned; not implemented or configured.
+Inbound Email Routing is implemented. Outbound email is not part of v1.
 
 ## Product outcome
 
-Each Agent may advertise a stable email address. Email received at that address
-becomes a Message and recipient Mailbox Entry. A Message addressed to `mailto:`
-creates an email Delivery.
+Each Agent advertises a stable email address and may configure one alias. Email
+received at either address becomes an inbound Message. Retired aliases are
+never reassigned.
 
 An example future profile may expose both a stable address and a mutable alias:
 
@@ -42,13 +42,11 @@ The initial reference implementation is expected to use one Worker project:
 
 ```text
 Cloudflare Email Routing -> email() -> Email transport -> Mailbox core
-Mailbox delivery queue -> Email transport -> Email Sending binding
+Outbound email is intentionally absent from v1
 ```
 
 Cloudflare remains the underlying email infrastructure; this project does not
-plan to implement an SMTP server. Provider capability and product-policy review
-is required before launch, especially because the sending service is intended
-for transactional rather than bulk marketing email.
+implement an SMTP server.
 
 ## Data preservation
 
