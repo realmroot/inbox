@@ -1,6 +1,6 @@
 import { z } from 'zod'
 
-export const API_VERSION = '2026-08-09'
+export const API_VERSION = '2026-08-11'
 
 export const addressSchema = z.string().trim().min(1).max(320).regex(/^agent:[A-Za-z0-9._~-]+$/)
 export const messageIdSchema = z.string().regex(/^msg_[0-9a-f]{32}$/)

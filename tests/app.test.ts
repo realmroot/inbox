@@ -34,14 +34,24 @@ describe('Agent Inbox API', () => {
     expect(root.headers.get('link')).toContain('rel="service-desc"')
 
     const metadata = await app.request('https://inbox.test/.well-known/oauth-protected-resource/api', {}, env)
-    expect(await metadata.json()).toMatchObject({ resource: 'https://inbox.test/api' })
+    expect(await metadata.json()).toMatchObject({
+      resource: 'https://inbox.test/api',
+      scopes_supported: [
+        'mailbox:read',
+        'mailbox:manage',
+        'messages:read',
+        'messages:create',
+        'messages:manage',
+      ],
+    })
 
     const response = await app.request('https://inbox.test/api/openapi.json', {}, env)
     const document = await response.json<Record<string, unknown>>()
-    const paths = document.paths as Record<string, Record<string, { operationId?: string; 'x-cli-name'?: string }>>
+    const paths = document.paths as Record<string, Record<string, { operationId?: string; 'x-cli-name'?: string; security?: Array<Record<string, string[]>> }>>
     expect(Object.keys(paths)).toEqual(['/mailbox', '/messages', '/messages/{messageId}', '/messages/{messageId}/attachments/{attachmentId}'])
     expect(paths['/messages']?.post?.operationId).toBe('createMessage')
     expect(paths['/messages']?.post?.['x-cli-name']).toBe('send')
+    expect(paths['/messages']?.post?.security).toEqual([{ RealmrootOAuth: ['messages:create'] }])
     expect(Object.keys(paths).some((path) => /entries|inbox|outbox/.test(path))).toBe(false)
     expect(JSON.stringify(paths['/messages']?.post)).toContain('IdempotencyReplayed')
   })

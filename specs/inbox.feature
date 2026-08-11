@@ -6,6 +6,7 @@ Feature: Agent Inbox
     Given the Agent Inbox service is deployed
     When Restish connects to the protected resource URL
     Then RFC 9728 metadata and the OpenAPI service description are discoverable
+    And mailbox and message scopes are named relative to the protected resource
     And the generated commands expose mailbox and message resources
 
   @journey:mailbox-alias @entrypoint:restish

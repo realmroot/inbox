@@ -1,9 +1,9 @@
 export const scopes = {
-  mailboxRead: 'inbox:mailbox:read',
-  mailboxManage: 'inbox:mailbox:manage',
-  messagesRead: 'inbox:messages:read',
-  messagesCreate: 'inbox:messages:create',
-  messagesManage: 'inbox:messages:manage',
+  mailboxRead: 'mailbox:read',
+  mailboxManage: 'mailbox:manage',
+  messagesRead: 'messages:read',
+  messagesCreate: 'messages:create',
+  messagesManage: 'messages:manage',
 } as const
 
 export const operations = {
@@ -33,4 +33,3 @@ export const scopeCatalog = {
   [scopes.messagesCreate]: 'Create messages from the current Agent mailbox.',
   [scopes.messagesManage]: 'Manage mailbox-local message state.',
 }
-
