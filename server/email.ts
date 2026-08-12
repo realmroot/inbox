@@ -1,5 +1,5 @@
 import PostalMime from 'postal-mime'
-import { createRealmrootAgentDirectory, stableAddressSubject, type AgentDirectory } from './agent-directory'
+import { createRealmrootAgentDirectory, stableAddressUsername, type AgentDirectory } from './agent-directory'
 import { getOrCreateMailboxForAgent, mailboxByEmail } from './repository'
 
 const MAX_EMAIL_BYTES = 10 * 1024 * 1024
@@ -16,8 +16,8 @@ export async function receiveEmail(
   }
   let mailbox = await mailboxByEmail(env.DB, message.to)
   if (!mailbox) {
-    const subject = stableAddressSubject(message.to, env.EMAIL_DOMAIN)
-    const identity = subject ? await agentDirectory.find(env.OIDC_ISSUER, subject) : null
+    const username = stableAddressUsername(message.to, env.EMAIL_DOMAIN)
+    const identity = username ? await agentDirectory.findByUsername(env.OIDC_ISSUER, username) : null
     if (identity) mailbox = await getOrCreateMailboxForAgent(env.DB, identity, env.EMAIL_DOMAIN)
   }
   if (!mailbox) {

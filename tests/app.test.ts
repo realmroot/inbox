@@ -17,8 +17,20 @@ const authenticate: Authenticator = async (request, runtimeEnv) => {
 }
 
 const knownAgents = new Set(['agt_alpha', 'agt_beta', 'agt_email'])
+const agentUsernames = new Map([
+  ['agt_alpha', 'alpha-agent'],
+  ['agt_beta', 'beta-agent'],
+  ['agt_email', 'email-agent'],
+])
 const agentDirectory: AgentDirectory = {
-  find: async (issuer, subject) => knownAgents.has(subject) ? { issuer, subject } : null,
+  find: async (issuer, subject) => {
+    const username = agentUsernames.get(subject)
+    return knownAgents.has(subject) && username ? { issuer, subject, username } : null
+  },
+  findByUsername: async (issuer, username) => {
+    const subject = [...agentUsernames].find(([, value]) => value === username)?.[0]
+    return subject ? { issuer, subject, username } : null
+  },
 }
 const app = createApp(authenticate, () => agentDirectory)
 const headers = (agent: string, extra: HeadersInit = {}) => ({
@@ -60,7 +72,7 @@ describe('Agent Inbox API', () => {
     const first = await app.request('https://inbox.test/api/mailbox', { headers: headers('agt_alpha') }, env)
     expect(first.status).toBe(200)
     const mailbox = await first.json<{ id: string; addresses: { stable: string; alias: string | null } }>()
-    expect(mailbox.addresses.stable).toBe('agt_alpha@agents.test')
+    expect(mailbox.addresses.stable).toBe('alpha-agent@agents.test')
 
     const updated = await app.request('https://inbox.test/api/mailbox', {
       method: 'PATCH',
@@ -84,6 +96,26 @@ describe('Agent Inbox API', () => {
       body: JSON.stringify({ alias: 'release-agent' }),
     }, env)
     expect(unavailable.status).toBe(409)
+  })
+
+  it('reconciles a legacy subject address to the immutable username [spec: inbox/mailbox-alias]', async () => {
+    const now = new Date().toISOString()
+    await env.DB.prepare(`
+      INSERT INTO mailbox (id, agent_issuer, agent_subject, stable_address, created_at, updated_at)
+      VALUES ('mbx_legacy', ?, 'agt_beta', 'agt_beta@agents.test', ?, ?)
+    `).bind(env.OIDC_ISSUER, now, now).run()
+
+    const response = await app.request('https://inbox.test/api/mailbox', { headers: headers('agt_beta') }, env)
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toMatchObject({
+      addresses: { stable: 'beta-agent@agents.test' },
+    })
+    await expect(
+      env.DB.prepare("SELECT stable_address, version FROM mailbox WHERE id = 'mbx_legacy'").first(),
+    ).resolves.toEqual({
+      stable_address: 'beta-agent@agents.test',
+      version: 2,
+    })
   })
 
   it('sends, receives, filters, reads, and idempotently replays one message [spec: inbox/agent-message-loop]', async () => {
@@ -172,7 +204,7 @@ describe('Agent Inbox API', () => {
     expect(await env.DB.prepare("SELECT id FROM mailbox WHERE agent_subject = 'agt_email'").first()).toBeNull()
     const raw = [
       'From: Human <human@example.com>',
-      'To: agt_email@agents.test',
+      'To: email-agent@agents.test',
       'Subject: Email hello',
       'Message-ID: <email-1@example.com>',
       'MIME-Version: 1.0',
@@ -194,7 +226,7 @@ describe('Agent Inbox API', () => {
     const encoded = new TextEncoder().encode(raw)
     const routed: ForwardableEmailMessage = {
       from: 'human@example.com',
-      to: 'agt_email@agents.test',
+      to: 'email-agent@agents.test',
       raw: new Response(encoded).body!,
       rawSize: encoded.byteLength,
       headers: new Headers({ 'Message-ID': '<email-1@example.com>' }),

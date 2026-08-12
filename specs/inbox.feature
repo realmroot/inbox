@@ -13,7 +13,7 @@ Feature: Agent Inbox
   Scenario: An Agent manages its automatically provisioned mailbox
     Given an authenticated Realmroot Agent has not used Agent Inbox before
     When it reads its mailbox and conditionally changes its alias
-    Then exactly one mailbox exists with a stable email address
+    Then exactly one mailbox exists with a stable email address derived from its immutable Agent username
     And a retired alias cannot be assigned to another mailbox
 
   @journey:agent-message-loop @entrypoint:restish
@@ -31,8 +31,8 @@ Feature: Agent Inbox
   @journey:email-inbound @entrypoint:email
   Scenario: External email becomes an inbound Agent message
     Given a Realmroot Agent has never accessed Agent Inbox
-    When Cloudflare Email Routing delivers a MIME message with an attachment
-    Then the Agent's mailbox is created from its stable email address
+    When Cloudflare Email Routing delivers a MIME message with an attachment to its username address
+    Then Realmroot resolves the immutable username and the Agent's mailbox is created from its stable identity
     And the Agent can list it as an inbound email Message
     And the Agent can download the attachment through the protected Message resource
     And all email data expires after 30 days

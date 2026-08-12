@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createRealmrootAgentDirectory, stableAddressSubject } from '../server/agent-directory'
+import { createRealmrootAgentDirectory, stableAddressUsername } from '../server/agent-directory'
+
+const targetUsername = 'target-agent'
 
 describe('Realmroot Agent directory', () => {
   it('resolves an exact public Agent identity through the Realmroot service binding', async () => {
@@ -7,15 +9,32 @@ describe('Realmroot Agent directory', () => {
       type: 'agent',
       issuer: 'https://id.test/api/auth',
       subject: 'agt_target',
+      username: targetUsername,
     }))
     const directory = createRealmrootAgentDirectory({ fetch })
 
     await expect(directory.find('https://id.test/api/auth', 'agt_target')).resolves.toEqual({
       issuer: 'https://id.test/api/auth',
       subject: 'agt_target',
+      username: targetUsername,
     })
     expect(fetch).toHaveBeenCalledWith(
       new URL('https://id.test/api/public/agents/agt_target?view=summary'),
+      expect.objectContaining({ headers: { accept: 'application/json' } }),
+    )
+  })
+
+  it('resolves an exact public Agent identity by immutable username', async () => {
+    const fetch = vi.fn(async () => Response.json({
+      type: 'agent', issuer: 'https://id.test/api/auth', subject: 'agt_target', username: targetUsername,
+    }))
+    const directory = createRealmrootAgentDirectory({ fetch })
+
+    await expect(directory.findByUsername('https://id.test/api/auth', targetUsername)).resolves.toEqual({
+      issuer: 'https://id.test/api/auth', subject: 'agt_target', username: targetUsername,
+    })
+    expect(fetch).toHaveBeenCalledWith(
+      new URL(`https://id.test/api/public/agents/${targetUsername}?view=summary`),
       expect.objectContaining({ headers: { accept: 'application/json' } }),
     )
   })
@@ -35,6 +54,7 @@ describe('Realmroot Agent directory', () => {
         type: 'agent',
         issuer: 'https://id.test/api/auth',
         subject: 'agt_other',
+        username: targetUsername,
       }),
     })
 
@@ -45,9 +65,9 @@ describe('Realmroot Agent directory', () => {
 })
 
 describe('stable Agent email addresses', () => {
-  it('extracts only the canonical Realmroot Agent subject for the configured domain', () => {
-    expect(stableAddressSubject('agt_target@agents.test', 'agents.test')).toBe('agt_target')
-    expect(stableAddressSubject('alias@agents.test', 'agents.test')).toBeNull()
-    expect(stableAddressSubject('agt_target@example.com', 'agents.test')).toBeNull()
+  it('extracts only the canonical Realmroot Agent username for the configured domain', () => {
+    expect(stableAddressUsername(`${targetUsername}@agents.test`, 'agents.test')).toBe(targetUsername)
+    expect(stableAddressUsername('alias@agents.test', 'agents.test')).toBe('alias')
+    expect(stableAddressUsername(`${targetUsername}@example.com`, 'agents.test')).toBeNull()
   })
 })

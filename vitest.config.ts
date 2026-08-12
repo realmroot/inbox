@@ -10,8 +10,16 @@ export default defineConfig({
         serviceBindings: {
           REALMROOT: (request) => {
             const subject = new URL(request.url).pathname.split('/').at(-1)
-            return subject === 'agt_wired'
-              ? Response.json({ type: 'agent', issuer: 'https://id.test/api/auth', subject })
+            const username = subject === 'agt_wired'
+              ? 'wired-agent'
+              : subject === 'agt_alpha'
+                ? 'alpha-agent'
+                : null
+            return username
+              ? Response.json({
+                  type: 'agent', issuer: 'https://id.test/api/auth', subject,
+                  username,
+                })
               : new Response(null, { status: 404 })
           },
         },

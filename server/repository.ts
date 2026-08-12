@@ -7,6 +7,7 @@ export interface Mailbox {
   id: string
   agentIssuer: string
   agentSubject: string
+  agentUsername: string | null
   stableAddress: string
   aliasAddress: string | null
   version: number
@@ -18,6 +19,7 @@ interface MailboxRow {
   id: string
   agent_issuer: string
   agent_subject: string
+  agent_username: string | null
   stable_address: string
   alias_address: string | null
   version: number
@@ -78,24 +80,40 @@ export interface MessageRepresentation {
   links: { self: string; mailbox: string }
 }
 
-export async function getOrCreateMailbox(db: D1Database, principal: AgentPrincipal, emailDomain: string) {
-  return getOrCreateMailboxForAgent(db, principal.agent, emailDomain)
+export async function getOrCreateMailbox(
+  db: D1Database,
+  principal: AgentPrincipal,
+  agentDirectory: AgentDirectory,
+  emailDomain: string,
+) {
+  const existing = await mailboxByAgent(db, principal.agent.issuer, principal.agent.subject)
+  if (existing?.agentUsername) return existing
+  const identity = await agentDirectory.find(principal.agent.issuer, principal.agent.subject)
+  if (!identity) throw forbidden('The authenticated Agent identity no longer exists.')
+  return getOrCreateMailboxForAgent(db, identity, emailDomain)
 }
 
 export async function getOrCreateMailboxForAgent(db: D1Database, agent: AgentIdentity, emailDomain: string) {
   const id = `mbx_${await digest(`${agent.issuer}\n${agent.subject}`, 32)}`
   const now = new Date().toISOString()
-  const local = /^[a-z0-9](?:[a-z0-9._-]{0,62}[a-z0-9])?$/i.test(agent.subject)
-    ? agent.subject.toLowerCase()
-    : `agt-${await digest(agent.subject, 24)}`
+  const stableAddress = `${agent.username}@${emailDomain}`.toLowerCase()
   await db.prepare(`
     INSERT OR IGNORE INTO mailbox
-      (id, agent_issuer, agent_subject, stable_address, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `).bind(id, agent.issuer, agent.subject, `${local}@${emailDomain}`.toLowerCase(), now, now).run()
-  const row = await db.prepare('SELECT * FROM mailbox WHERE agent_issuer = ? AND agent_subject = ?')
+      (id, agent_issuer, agent_subject, agent_username, stable_address, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).bind(id, agent.issuer, agent.subject, agent.username, stableAddress, now, now).run()
+  let row = await db.prepare('SELECT * FROM mailbox WHERE agent_issuer = ? AND agent_subject = ?')
     .bind(agent.issuer, agent.subject).first<MailboxRow>()
   if (!row) throw new Error('Mailbox provisioning did not produce a mailbox.')
+  if (row.agent_username !== agent.username || row.stable_address !== stableAddress) {
+    const result = await db.prepare(`
+      UPDATE mailbox SET agent_username = ?, stable_address = ?, version = version + 1, updated_at = ?
+      WHERE id = ? AND version = ?
+    `).bind(agent.username, stableAddress, now, row.id, row.version).run()
+    if (result.meta.changes !== 1) throw new Error('Mailbox stable address reconciliation did not update the mailbox.')
+    row = await db.prepare('SELECT * FROM mailbox WHERE id = ?').bind(row.id).first<MailboxRow>()
+    if (!row) throw new Error('Reconciled mailbox was not found.')
+  }
   return mailbox(row)
 }
 
@@ -346,6 +364,7 @@ function mailbox(row: MailboxRow): Mailbox {
     id: row.id,
     agentIssuer: row.agent_issuer,
     agentSubject: row.agent_subject,
+    agentUsername: row.agent_username,
     stableAddress: row.stable_address,
     aliasAddress: row.alias_address,
     version: row.version,

@@ -26,6 +26,8 @@ Agent 身份和 Agent 执行实例拥有不同的生命周期：
 可以消费 Inbox，再自行判断恢复旧 Session 还是创建新 Session。
 经过 Realmroot 验证的 Agent 即使从未访问过 Inbox，也可以在第一次收到消息时
 自动创建 Mailbox。
+稳定邮箱地址为 `<agent-username>@agents.realmroot.dev`，另外可以配置一个 Mailbox
+alias 作为第二个地址。
 
 ## 项目边界
 

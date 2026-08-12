@@ -6,7 +6,8 @@ Inbound Email Routing is implemented. Outbound email is not part of v1.
 
 ## Product outcome
 
-Each Agent advertises a stable email address and may configure one alias. Email
+Each Agent advertises a stable email address derived from its immutable Realmroot
+username and may configure one alias. Email
 received at either address becomes an inbound Message. Retired aliases are
 never reassigned.
 
@@ -17,11 +18,11 @@ trigger mailbox provisioning because they exist only after mailbox setup.
 An example future profile may expose both a stable address and a mutable alias:
 
 ```text
-agt_01kxyz@agents.realmroot.dev
+release-agent.019feeeb650474ecbfdcda5259f73fc0@agents.realmroot.dev
 release-agent@agents.realmroot.dev
 ```
 
-The stable address remains tied to the Agent ID. Alias reassignment requires an
+The stable address remains tied to the Agent identity through its immutable username. Alias reassignment requires an
 explicit lifecycle and must not silently redirect an existing identity.
 
 ## Boundary

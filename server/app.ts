@@ -84,20 +84,26 @@ export function createApp(
   app.use('/api/messages/*', versionMiddleware)
 
   app.get('/api/mailbox', authorize(authenticate, operations.getMailbox.operationId), async (c) => {
-    const mailbox = await currentMailbox(c)
+    const mailbox = await currentMailbox(c, agentDirectory(c.env))
     c.header('ETag', mailboxEtag(mailbox))
     return c.json(mailboxRepresentation(mailbox, c.env.APP_ORIGIN))
   })
   app.patch('/api/mailbox', authorize(authenticate, operations.updateMailbox.operationId), async (c) => {
     const input = await parseJson(c, updateMailboxSchema)
-    const mailbox = await updateMailbox(c.env.DB, await currentMailbox(c), input, c.req.header('If-Match'), c.env.EMAIL_DOMAIN)
+    const mailbox = await updateMailbox(
+      c.env.DB,
+      await currentMailbox(c, agentDirectory(c.env)),
+      input,
+      c.req.header('If-Match'),
+      c.env.EMAIL_DOMAIN,
+    )
     c.header('ETag', mailboxEtag(mailbox))
     return c.json(mailboxRepresentation(mailbox, c.env.APP_ORIGIN))
   })
   app.get('/api/messages', authorize(authenticate, operations.listMessages.operationId), async (c) => {
     const parsed = listMessagesQuerySchema.safeParse(c.req.query())
     if (!parsed.success) throw badRequest(parsed.error.issues.map((issue) => issue.message).join('; '))
-    const mailbox = await currentMailbox(c)
+    const mailbox = await currentMailbox(c, agentDirectory(c.env))
     const result = await listMessages(c.env.DB, mailbox.id, c.env.APP_ORIGIN, parsed.data)
     if (result.pagination.nextPageToken) {
       const next = new URL(c.req.url)
@@ -110,7 +116,7 @@ export function createApp(
     const key = c.req.header('Idempotency-Key')
     if (!key || key.length < 8 || key.length > 200) throw badRequest('Idempotency-Key must contain 8 to 200 characters.')
     const input = await parseJson(c, createMessageSchema)
-    const mailbox = await currentMailbox(c)
+    const mailbox = await currentMailbox(c, agentDirectory(c.env))
     const result = await createMessage(
       c.env.DB,
       mailbox,
@@ -126,7 +132,7 @@ export function createApp(
     return c.json(result.message, result.replayed ? 200 : 201)
   })
   app.get('/api/messages/:messageId', authorize(authenticate, operations.getMessage.operationId), async (c) => {
-    const mailbox = await currentMailbox(c)
+    const mailbox = await currentMailbox(c, agentDirectory(c.env))
     const message = await getMessage(c.env.DB, mailbox.id, requiredParam(c, 'messageId'), c.env.APP_ORIGIN)
     const version = message.direction === 'outbound' ? null : await recipientVersion(c.env.DB, mailbox.id, message.id)
     const etag = messageEtag(version)
@@ -135,14 +141,14 @@ export function createApp(
   })
   app.patch('/api/messages/:messageId', authorize(authenticate, operations.updateMessage.operationId), async (c) => {
     const input = await parseJson(c, updateMessageSchema)
-    const mailbox = await currentMailbox(c)
+    const mailbox = await currentMailbox(c, agentDirectory(c.env))
     const message = await updateMessage(c.env.DB, mailbox.id, requiredParam(c, 'messageId'), input, c.req.header('If-Match'), c.env.APP_ORIGIN)
     const version = await recipientVersion(c.env.DB, mailbox.id, message.id)
     c.header('ETag', messageEtag(version)!)
     return c.json(message)
   })
   app.get('/api/messages/:messageId/attachments/:attachmentId', authorize(authenticate, operations.getMessageAttachment.operationId), async (c) => {
-    const mailbox = await currentMailbox(c)
+    const mailbox = await currentMailbox(c, agentDirectory(c.env))
     const attachment = await getAttachment(c.env.DB, mailbox.id, requiredParam(c, 'messageId'), requiredParam(c, 'attachmentId'))
     const object = await c.env.ATTACHMENTS.get(attachment.object_key)
     if (!object?.body) throw new ApiError(404, 'https://inbox.realmroot.dev/problems/not-found', 'Not found', 'Attachment data not found.')
@@ -178,8 +184,8 @@ async function versionMiddleware(c: Context<AppEnv>, next: Next) {
   await next()
 }
 
-async function currentMailbox(c: Context<AppEnv>) {
-  return getOrCreateMailbox(c.env.DB, c.get('principal'), c.env.EMAIL_DOMAIN)
+async function currentMailbox(c: Context<AppEnv>, directory: AgentDirectory) {
+  return getOrCreateMailbox(c.env.DB, c.get('principal'), directory, c.env.EMAIL_DOMAIN)
 }
 
 async function parseJson<T>(c: Context<AppEnv>, schema: { safeParse(value: unknown): { success: true; data: T } | { success: false; error: { issues: Array<{ message: string }> } } }) {
