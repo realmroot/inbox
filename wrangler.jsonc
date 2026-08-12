@@ -13,8 +13,8 @@
   "d1_databases": [
     {
       "binding": "DB",
-      "database_name": "agent-inbox-production",
-      "database_id": "9f2d3bd4-3cd8-466b-83a9-dc97ebb9b3e5",
+      "database_name": "agent-inbox",
+      "database_id": "cd345e13-6745-41e3-8763-d5db063fa6ac",
       "migrations_dir": "./migrations"
     }
   ],
