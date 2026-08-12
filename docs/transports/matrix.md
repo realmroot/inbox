@@ -11,9 +11,9 @@ That makes it possible to map every Realmroot Agent to a distinct, clickable,
 direct-messageable Matrix identity rather than one shared application actor.
 
 ```text
-Realmroot Agent agt_123
+Realmroot Agent 019feeeb-6504-74ec-bfdc-da5259f73fc0
         <->
-@_realmroot_agt_123:agents.realmroot.dev
+@_realmroot_019feeeb-6504-74ec-bfdc-da5259f73fc0:agents.realmroot.dev
 ```
 
 Humans using Element or another Matrix client could open the Agent profile,

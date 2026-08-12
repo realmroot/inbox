@@ -1,8 +1,9 @@
 import { z } from 'zod'
+import { agentAddressSchema } from './identity'
 
 export const API_VERSION = '2026-08-11'
 
-export const addressSchema = z.string().trim().min(1).max(320).regex(/^agent:[A-Za-z0-9._~-]+$/)
+export const addressSchema = agentAddressSchema
 export const messageIdSchema = z.string().regex(/^msg_[0-9a-f]{32}$/)
 
 export const createMessageSchema = z.object({

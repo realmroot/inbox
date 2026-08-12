@@ -119,7 +119,7 @@ export function openApi(origin: string, issuer: string) {
         Pagination: { type: 'object', required: ['pageSize'], properties: { pageSize: { type: 'integer' }, nextPageToken: { type: 'string' } } },
         Mailbox: { type: 'object', required: ['id', 'agent', 'addresses', 'createdAt', 'updatedAt', 'links'], properties: { id: { type: 'string' }, agent: { type: 'object' }, addresses: { type: 'object' }, createdAt: { type: 'string', format: 'date-time' }, updatedAt: { type: 'string', format: 'date-time' }, links: { type: 'object' } } },
         Message: message,
-        CreateMessage: { type: 'object', additionalProperties: false, required: ['recipients', 'content'], properties: { recipients: { type: 'array', minItems: 1, maxItems: 20, items: { type: 'string', pattern: '^agent:' } }, subject: { type: ['string', 'null'] }, content: { type: 'object', properties: { text: { type: 'string' }, html: { type: 'string' } } }, inReplyTo: { type: ['string', 'null'], pattern: '^msg_[0-9a-f]{32}$' } } },
+        CreateMessage: { type: 'object', additionalProperties: false, required: ['recipients', 'content'], properties: { recipients: { type: 'array', minItems: 1, maxItems: 20, items: { type: 'string', pattern: '^agent:[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-7[0-9A-Fa-f]{3}-[89ABab][0-9A-Fa-f]{3}-[0-9A-Fa-f]{12}$' } }, subject: { type: ['string', 'null'] }, content: { type: 'object', properties: { text: { type: 'string' }, html: { type: 'string' } } }, inReplyTo: { type: ['string', 'null'], pattern: '^msg_[0-9a-f]{32}$' } } },
       },
     },
   }

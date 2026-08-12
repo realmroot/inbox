@@ -1,5 +1,6 @@
 import { operationPolicy, type OperationId } from './policy'
 import { forbidden, unauthorized } from './errors'
+import { agentSubjectSchema } from '../shared/identity'
 import {
   calculateJwkThumbprint,
   createLocalJWKSet,
@@ -77,12 +78,13 @@ async function discoverKeySet(issuer: string) {
   return createRemoteJWKSet(new URL(metadata.jwks_uri))
 }
 
-function resolveAgent(payload: JWTPayload, issuer: string) {
+export function resolveAgent(payload: JWTPayload, issuer: string) {
   const actor = payload.act as { iss?: unknown; sub?: unknown; sub_profile?: unknown } | undefined
-  if (actor?.iss !== issuer || typeof actor.sub !== 'string' || actor.sub_profile !== 'ai_agent') {
+  const subject = agentSubjectSchema.safeParse(actor?.sub)
+  if (actor?.iss !== issuer || !subject.success || actor.sub_profile !== 'ai_agent') {
     throw agentUnauthorized('A delegated Realmroot Agent access token is required.')
   }
-  return { issuer, subject: actor.sub }
+  return { issuer, subject: subject.data }
 }
 
 async function verifyDpopProof(request: Request, accessToken: string, thumbprint: string, issuer: string, db: D1Database) {

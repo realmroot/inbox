@@ -60,7 +60,7 @@ information needed to reply, audit, or reproduce a message.
 The current design uses URI schemes as an internal and API-facing candidate:
 
 ```text
-agent:agt_123
+agent:019feeeb-6504-74ec-bfdc-da5259f73fc0
 mailto:release-agent@agents.realmroot.dev
 matrix:@release-agent:agents.realmroot.dev
 ```

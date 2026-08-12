@@ -2,6 +2,9 @@ import path from 'node:path'
 import { cloudflareTest, readD1Migrations } from '@cloudflare/vitest-pool-workers'
 import { defineConfig } from 'vitest/config'
 
+const senderSubject = '019feeeb-6504-74ec-bfdc-da5259f73fc0'
+const wiredSubject = '019feeeb-6504-74ec-bfdc-da5259f73fc2'
+
 export default defineConfig({
   plugins: [
     cloudflareTest(async () => ({
@@ -10,9 +13,9 @@ export default defineConfig({
         serviceBindings: {
           REALMROOT: (request) => {
             const subject = new URL(request.url).pathname.split('/').at(-1)
-            const username = subject === 'agt_wired'
+            const username = subject === wiredSubject
               ? 'wired-agent'
-              : subject === 'agt_alpha'
+              : subject === senderSubject
                 ? 'alpha-agent'
                 : null
             return username

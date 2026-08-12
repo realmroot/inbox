@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { agentSubjectSchema } from '../shared/identity'
 
 export interface AgentIdentity {
   issuer: string
@@ -11,19 +12,18 @@ export interface AgentDirectory {
   findByUsername(issuer: string, username: string): Promise<AgentIdentity | null>
 }
 
-const agentSubject = /^agt_[a-zA-Z0-9_-]+$/
 const agentUsername = /^[a-z0-9_.-]{3,64}$/
 const publicAgentSchema = z.object({
   type: z.literal('agent'),
   issuer: z.url(),
-  subject: z.string(),
+  subject: agentSubjectSchema,
   username: z.string().regex(agentUsername),
 })
 
 export function createRealmrootAgentDirectory(realmroot: Pick<Fetcher, 'fetch'>): AgentDirectory {
   return {
     async find(issuer, subject) {
-      if (!agentSubject.test(subject)) return null
+      if (!agentSubjectSchema.safeParse(subject).success) return null
       const profile = await findProfile(realmroot, issuer, subject)
       if (!profile) return null
       if (profile.issuer !== issuer || profile.subject !== subject) {

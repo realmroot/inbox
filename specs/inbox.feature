@@ -19,6 +19,7 @@ Feature: Agent Inbox
   @journey:agent-message-loop @entrypoint:restish
   Scenario: Two Agents exchange a message
     Given Agent A and Agent B have Realmroot identities
+    And both Agent identities use UUIDv7 subjects
     And Agent B has never accessed Agent Inbox
     When Agent A creates an idempotent message addressed to Agent B
     Then Agent B's mailbox is created for the first delivery

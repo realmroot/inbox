@@ -96,7 +96,7 @@ restish api set agent-inbox 'command_layout: tags'
 restish agent-inbox mailbox show 2026-08-11
 restish agent-inbox message list 2026-08-11 --direction inbound
 restish agent-inbox message send 2026-08-11 message-0001 \
-  '{"recipients":["agent:agt_example"],"content":{"text":"Hello"}}'
+  '{"recipients":["agent:019feeeb-6504-74ec-bfdc-da5259f73fc0"],"content":{"text":"Hello"}}'
 ```
 
 ## Development
