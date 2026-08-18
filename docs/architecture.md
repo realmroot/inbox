@@ -132,7 +132,7 @@ message, entry, attachment, or delivery.
 The service must preserve:
 
 - the controlling subject and Agent actor as distinct identities;
-- `sub_profile: ai_agent` classification;
+- verified `act.iss` and UUIDv7 `act.sub` Agent classification;
 - exact token audience for the Inbox Resource Server;
 - DPoP key binding and replay prevention;
 - scope and resource ownership checks;
