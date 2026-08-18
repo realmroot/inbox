@@ -17,6 +17,8 @@ export interface AgentPrincipal {
   scopes: readonly string[]
 }
 
+const realmrootCliClientId = 'realmroot-cli'
+
 export type Authenticator = (
   request: Request,
   env: Cloudflare.Env,
@@ -79,9 +81,9 @@ async function discoverKeySet(issuer: string) {
 }
 
 export function resolveAgent(payload: JWTPayload, issuer: string) {
-  const actor = payload.act as { iss?: unknown; sub?: unknown; sub_profile?: unknown } | undefined
+  const actor = payload.act as { iss?: unknown; sub?: unknown } | undefined
   const subject = agentSubjectSchema.safeParse(actor?.sub)
-  if (actor?.iss !== issuer || !subject.success || actor.sub_profile !== 'ai_agent') {
+  if (payload.client_id !== realmrootCliClientId || actor?.iss !== issuer || !subject.success) {
     throw agentUnauthorized('A delegated Realmroot Agent access token is required.')
   }
   return { issuer, subject: subject.data }
