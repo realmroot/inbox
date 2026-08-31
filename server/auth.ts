@@ -17,6 +17,13 @@ export interface AgentPrincipal {
   scopes: readonly string[]
 }
 
+export interface ServicePrincipal {
+  issuer: string
+  subject: string
+  clientId: string
+  scopes: readonly string[]
+}
+
 const realmrootCliClientId = 'realmroot-cli'
 
 export type Authenticator = (
@@ -24,6 +31,12 @@ export type Authenticator = (
   env: Cloudflare.Env,
   operationId: OperationId,
 ) => Promise<AgentPrincipal>
+
+export type ServiceAuthenticator = (
+  request: Request,
+  env: Cloudflare.Env,
+  operationId: OperationId,
+) => Promise<ServicePrincipal>
 
 export const authenticateAgent: Authenticator = async (request, env, operationId) => {
   const requiredScope = operationPolicy(operationId).scope
@@ -51,6 +64,36 @@ export const authenticateAgent: Authenticator = async (request, env, operationId
     agent,
     scopes: grantedScopes,
   }
+}
+
+export const authenticateAgencyService: ServiceAuthenticator = async (request, env, operationId) => {
+  const requiredScope = operationPolicy(operationId).scope
+  const match = request.headers.get('authorization')?.match(/^Bearer\s+(.+)$/i)
+  if (!match?.[1]) throw serviceUnauthorized('Realmroot Bearer access token is required.')
+  const { payload, protectedHeader } = await jwtVerify(match[1], await keySet(env), {
+    issuer: env.OIDC_ISSUER,
+    audience: `${env.APP_ORIGIN}/api`,
+    algorithms: ['EdDSA', 'ES256', 'RS256'],
+  }).catch(() => {
+    throw serviceUnauthorized('Agency service access token is invalid.')
+  })
+  if (protectedHeader.typ !== 'at+jwt') throw serviceUnauthorized('Agency service access token type is invalid.')
+  return resolveAgencyService(payload, env, requiredScope)
+}
+
+export function resolveAgencyService(
+  payload: JWTPayload,
+  env: { OIDC_ISSUER: string; AGENCY_CLIENT_ID: string },
+  requiredScope: string,
+): ServicePrincipal {
+  if (!env.AGENCY_CLIENT_ID) throw new Error('AGENCY_CLIENT_ID is required.')
+  if (typeof payload.sub !== 'string') throw serviceUnauthorized('Agency service access token has no subject.')
+  if (payload.client_id !== env.AGENCY_CLIENT_ID || payload.act !== undefined || payload.cnf !== undefined) {
+    throw serviceUnauthorized('Agency service identity is invalid.')
+  }
+  const grantedScopes = typeof payload.scope === 'string' ? payload.scope.split(/\s+/).filter(Boolean) : []
+  if (!grantedScopes.includes(requiredScope)) throw serviceInsufficientScope(requiredScope)
+  return { issuer: env.OIDC_ISSUER, subject: payload.sub, clientId: env.AGENCY_CLIENT_ID, scopes: grantedScopes }
 }
 
 function authorizationToken(request: Request) {
@@ -130,6 +173,14 @@ function insufficientScope(scope: string) {
 
 function dpopUnauthorized(message: string) {
   return unauthorized(message, { 'WWW-Authenticate': `DPoP error="invalid_dpop_proof", error_description="${message}"` })
+}
+
+function serviceUnauthorized(message: string) {
+  return unauthorized(message, { 'WWW-Authenticate': `Bearer error="invalid_token", error_description="${message}"` })
+}
+
+function serviceInsufficientScope(scope: string) {
+  return forbidden(`The ${scope} scope is required.`, { 'WWW-Authenticate': `Bearer error="insufficient_scope", scope="${scope}"` })
 }
 
 function base64url(bytes: Uint8Array) {

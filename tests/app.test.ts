@@ -1,10 +1,11 @@
 import { env } from 'cloudflare:test'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { createApp } from '../server/app'
-import type { Authenticator } from '../server/auth'
+import type { Authenticator, ServiceAuthenticator } from '../server/auth'
 import type { AgentDirectory } from '../server/agent-directory'
 import { receiveEmail } from '../server/email'
 import { API_VERSION } from '../shared/contracts'
+import { createHttpNotificationTransport, deliverDueNotifications } from '../server/notifications'
 
 const authenticate: Authenticator = async (request, runtimeEnv) => {
   const subject = request.headers.get('x-test-agent')
@@ -15,6 +16,13 @@ const authenticate: Authenticator = async (request, runtimeEnv) => {
     scopes: [],
   }
 }
+
+const authenticateService: ServiceAuthenticator = async (_request, runtimeEnv) => ({
+  issuer: runtimeEnv.OIDC_ISSUER,
+  subject: 'agency-service',
+  clientId: runtimeEnv.AGENCY_CLIENT_ID,
+  scopes: ['subscriptions:read', 'subscriptions:manage'],
+})
 
 const alphaSubject = '019feeeb-6504-74ec-bfdc-da5259f73fc0'
 const betaSubject = '019feeeb-6504-74ec-bfdc-da5259f73fc1'
@@ -36,10 +44,14 @@ const agentDirectory: AgentDirectory = {
     return subject ? { issuer, subject, username } : null
   },
 }
-const app = createApp(authenticate, () => agentDirectory)
+const app = createApp(authenticate, () => agentDirectory, authenticateService)
 const headers = (agent: string, extra: HeadersInit = {}) => ({
   'API-Version': API_VERSION,
   'x-test-agent': agent,
+  ...Object.fromEntries(new Headers(extra)),
+})
+const serviceHeaders = (extra: HeadersInit = {}) => ({
+  'API-Version': API_VERSION,
   ...Object.fromEntries(new Headers(extra)),
 })
 
@@ -58,18 +70,153 @@ describe('Agent Inbox API', () => {
         'messages:read',
         'messages:create',
         'messages:manage',
+        'subscriptions:read',
+        'subscriptions:manage',
       ],
     })
 
     const response = await app.request('https://inbox.test/api/openapi.json', {}, env)
     const document = await response.json<Record<string, unknown>>()
     const paths = document.paths as Record<string, Record<string, { operationId?: string; 'x-cli-name'?: string; security?: Array<Record<string, string[]>> }>>
-    expect(Object.keys(paths)).toEqual(['/mailbox', '/messages', '/messages/{messageId}', '/messages/{messageId}/attachments/{attachmentId}'])
+    expect(Object.keys(paths)).toEqual([
+      '/mailbox',
+      '/messages',
+      '/messages/{messageId}',
+      '/messages/{messageId}/attachments/{attachmentId}',
+      '/subscriptions',
+      '/subscriptions/{subscriptionId}',
+    ])
     expect(paths['/messages']?.post?.operationId).toBe('createMessage')
     expect(paths['/messages']?.post?.['x-cli-name']).toBe('send')
     expect(paths['/messages']?.post?.security).toEqual([{ RealmrootOAuth: ['messages:create'] }])
+    expect(paths['/subscriptions/{subscriptionId}']?.put?.security).toEqual([{ RealmrootServiceOAuth: ['subscriptions:manage'] }])
     expect(Object.keys(paths).some((path) => /entries|inbox|outbox/.test(path))).toBe(false)
     expect(JSON.stringify(paths['/messages']?.post)).toContain('IdempotencyReplayed')
+    expect(JSON.stringify(document)).toContain('"writeOnly":true')
+  })
+
+  it('manages write-only notification Subscriptions and retries one stable event at least once', async () => {
+    const subscriptionId = 'sub_0123456789abcdef0123456789abcdef'
+    const callbackToken = 'agency-callback-token-0123456789abcdef'
+    const created = await app.request(`https://inbox.test/api/subscriptions/${subscriptionId}`, {
+      method: 'PUT',
+      headers: serviceHeaders({ 'Content-Type': 'application/json', 'If-None-Match': '*' }),
+      body: JSON.stringify({
+        agentId: betaSubject,
+        events: ['message.created'],
+        delivery: {
+          url: 'https://agency.test/inbox-events',
+          authorization: { scheme: 'bearer', token: callbackToken },
+        },
+      }),
+    }, env)
+    expect(created.status).toBe(201)
+    expect(created.headers.get('etag')).toBe('"subscription-1"')
+    const subscription = await created.json<Record<string, unknown>>()
+    expect(subscription).toMatchObject({
+      id: subscriptionId,
+      agentId: betaSubject,
+      events: ['message.created'],
+      delivery: { url: 'https://agency.test/inbox-events', authorization: { scheme: 'bearer' } },
+    })
+    expect(JSON.stringify(subscription)).not.toContain(callbackToken)
+    const secret = await env.DB.prepare('SELECT secret_ciphertext FROM subscription WHERE id = ?')
+      .bind(subscriptionId).first<{ secret_ciphertext: string }>()
+    expect(secret?.secret_ciphertext).not.toContain(callbackToken)
+
+    const replacementToken = 'rotated-callback-token-0123456789abcdef'
+    const replaced = await app.request(`https://inbox.test/api/subscriptions/${subscriptionId}`, {
+      method: 'PUT',
+      headers: serviceHeaders({ 'Content-Type': 'application/json', 'If-Match': created.headers.get('etag')! }),
+      body: JSON.stringify({
+        agentId: betaSubject,
+        events: ['message.created'],
+        delivery: {
+          url: 'https://agency.test/inbox-events/v2',
+          authorization: { scheme: 'bearer', token: replacementToken },
+        },
+      }),
+    }, env)
+    expect(replaced.status).toBe(200)
+    expect(replaced.headers.get('etag')).toBe('"subscription-2"')
+    expect(JSON.stringify(await replaced.json())).not.toContain(replacementToken)
+    const listed = await app.request('https://inbox.test/api/subscriptions?pageSize=10', {
+      headers: serviceHeaders(),
+    }, env)
+    expect(await listed.json()).toMatchObject({
+      items: [{ id: subscriptionId, delivery: { authorization: { scheme: 'bearer' } } }],
+      pagination: { pageSize: 10 },
+    })
+    const otherServiceApp = createApp(authenticate, () => agentDirectory, async (_request, runtimeEnv) => ({
+      issuer: runtimeEnv.OIDC_ISSUER,
+      subject: 'other-service',
+      clientId: runtimeEnv.AGENCY_CLIENT_ID,
+      scopes: ['subscriptions:read'],
+    }))
+    const concealed = await otherServiceApp.request(`https://inbox.test/api/subscriptions/${subscriptionId}`, {
+      headers: serviceHeaders(),
+    }, env)
+    expect(concealed.status).toBe(404)
+
+    const sent = await app.request('https://inbox.test/api/messages', {
+      method: 'POST',
+      headers: headers(alphaSubject, { 'Content-Type': 'application/json', 'Idempotency-Key': 'notification-message-0001' }),
+      body: JSON.stringify({
+        recipients: [`agent:${betaSubject}`],
+        content: { text: 'Wake up' },
+        routingKey: 'trigger_01HXYZ',
+      }),
+    }, env)
+    expect(sent.status).toBe(201)
+    const message = await sent.json<{ id: string; routingKey: string }>()
+    expect(message.routingKey).toBe('trigger_01HXYZ')
+    const pending = await env.DB.prepare('SELECT id, status FROM notification_event WHERE subscription_id = ?')
+      .bind(subscriptionId).first<{ id: string; status: string }>()
+    expect(pending?.status).toBe('pending')
+
+    const requests: Array<{ url: string; headers: Headers; event: Record<string, unknown>; redirect?: RequestInit['redirect'] }> = []
+    const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      requests.push({
+        url: String(input),
+        headers: new Headers(init?.headers),
+        event: JSON.parse(String(init?.body)) as Record<string, unknown>,
+        redirect: init?.redirect,
+      })
+      return new Response(null, { status: requests.length === 1 ? 429 : 204 })
+    })
+    const transport = createHttpNotificationTransport(fetcher as typeof fetch)
+    const firstAttempt = await deliverDueNotifications(env, transport, new Date(Date.now() + 1000))
+    expect(firstAttempt).toMatchObject({ claimed: 1, retrying: 1 })
+    const secondAttempt = await deliverDueNotifications(env, transport, new Date(Date.now() + 121_000))
+    expect(secondAttempt).toMatchObject({ claimed: 1, delivered: 1 })
+    expect(requests).toHaveLength(2)
+    expect(requests[0]?.url).toBe('https://agency.test/inbox-events/v2')
+    expect(requests[0]?.headers.get('authorization')).toBe(`Bearer ${replacementToken}`)
+    expect(requests[0]?.headers.get('content-type')).toBe('application/json')
+    expect(requests[0]?.redirect).toBe('manual')
+    expect(requests[0]?.event).toMatchObject({
+      eventId: pending?.id,
+      type: 'message.created',
+      subscriptionId,
+      agentId: betaSubject,
+      messageId: message.id,
+      routingKey: 'trigger_01HXYZ',
+    })
+    expect(Object.keys(requests[0]!.event).sort()).toEqual([
+      'agentId', 'eventId', 'messageId', 'occurredAt', 'routingKey', 'subscriptionId', 'type',
+    ])
+    expect(requests[1]?.event.eventId).toBe(requests[0]?.event.eventId)
+
+    const read = await app.request(`https://inbox.test/api/subscriptions/${subscriptionId}`, {
+      headers: serviceHeaders(),
+    }, env)
+    expect(JSON.stringify(await read.json())).not.toContain(callbackToken)
+    expect(read.headers.get('etag')).toBe('"subscription-2"')
+    const deleted = await app.request(`https://inbox.test/api/subscriptions/${subscriptionId}`, {
+      method: 'DELETE', headers: serviceHeaders({ 'If-Match': read.headers.get('etag')! }),
+    }, env)
+    expect(deleted.status).toBe(204)
+    expect(await env.DB.prepare('SELECT id FROM notification_event WHERE subscription_id = ?').bind(subscriptionId).first()).toBeNull()
   })
 
   it('auto-provisions one stable mailbox and retires replaced aliases [spec: inbox/mailbox-alias]', async () => {

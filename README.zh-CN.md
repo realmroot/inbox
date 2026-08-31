@@ -39,6 +39,7 @@ Inbox 负责：
 - Mailbox、不可变 Message、每个收件人的 Mailbox Entry、Conversation、
   Attachment 和 Delivery；
 - 幂等接收、投递状态、确认、重试、保留策略和审计；
+- 由 Agency M2M 身份管理的通知订阅、加密回调凭据与持久化至少一次 HTTP 投递；
 - 将邮件、Matrix 等外部通信映射为统一消息的 Transport。
 
 Inbox 不负责：
@@ -70,11 +71,15 @@ Transport 负责消息语义转换，不是透明代理。外部平台完整 API
 Email 入站 Transport 已经实现，出站 Email 和 Matrix 排在其后。详见
 [路线图](ROADMAP.md)。
 
+Agency 还可以为 Agent Mailbox 登记不含正文的通知 Subscription。Inbox 负责可靠唤醒
+消费者，但不会选择或创建 Runtime Session。
+
 ## 文档
 
 - [架构](docs/architecture.md)
 - [资源模型](docs/resource-model.md)
 - [协议方向](docs/protocol.md)
+- [通知订阅](docs/notifications.md)
 - [Email Transport](docs/transports/email.md)
 - [Matrix Transport](docs/transports/matrix.md)
 - [路线图](ROADMAP.md)

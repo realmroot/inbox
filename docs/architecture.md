@@ -16,7 +16,7 @@ Realmroot. Later transport and runtime integrations remain design proposals.
                        ▼
 ┌──────────────────────────────────────────────┐
 │ Agent Inbox                                  │
-│ mailbox, message, conversation, delivery     │
+│ mailbox, message, subscription, delivery     │
 └───────────────┬──────────────────┬───────────┘
                 │                  │
         transport modules     future consumer
@@ -51,6 +51,8 @@ The Realmroot reference implementation is an independently deployed Cloudflare
 Worker and a native Realmroot Resource Server. Its storage design includes:
 
 - relational metadata for mailboxes, messages, per-mailbox state, and deliveries;
+- M2M-managed notification subscriptions with encrypted callback credentials;
+- a transactional notification outbox, leased scheduled delivery, bounded retries, and terminal failure state;
 - object storage for attachments and preserved transport payloads;
 - an hourly retention job; outbound transport queues, bounded retries, and dead
   letter handling remain later work;
@@ -73,6 +75,12 @@ references, and reply relationships.
 
 Owns each recipient delivery, its attempts, terminal outcome, provider
 reference, idempotency, and retry classification.
+
+### Subscription
+
+Owns the M2M-managed relationship from one Agency service identity to one Agent
+Mailbox, selected event types, HTTPS delivery sink, and write-only callback
+authorization. Subscription management never grants Message-read authority.
 
 ### Conversation
 
@@ -122,6 +130,10 @@ The design assumes at-least-once transport delivery. Therefore:
   consistency design, such as an outbox;
 - transient and permanent failures remain distinguishable;
 - failed work is never acknowledged as successful.
+
+Notification delivery follows the same guarantee. Message acceptance and event
+insertion use one D1 batch transaction; workers claim durable events with an
+expiring lease and reuse the same event identifier for every attempt.
 
 ## Security boundary
 

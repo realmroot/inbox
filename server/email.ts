@@ -1,6 +1,7 @@
 import PostalMime from 'postal-mime'
 import { createRealmrootAgentDirectory, stableAddressUsername, type AgentDirectory } from './agent-directory'
 import { getOrCreateMailboxForAgent, mailboxByEmail } from './repository'
+import { enqueueNotificationStatement } from './notifications'
 
 const MAX_EMAIL_BYTES = 10 * 1024 * 1024
 const EMAIL_RETENTION_DAYS = 30
@@ -27,9 +28,15 @@ export async function receiveEmail(
   const raw = await new Response(message.raw).arrayBuffer()
   const parsed = await PostalMime.parse(raw)
   const providerReference = `${parsed.messageId ?? await digest(raw)}|${message.to.toLowerCase()}`
-  const duplicate = await env.DB.prepare("SELECT id FROM message WHERE transport = 'email' AND transport_reference = ?")
-    .bind(providerReference).first<{ id: string }>()
-  if (duplicate) return
+  const duplicate = await env.DB.prepare("SELECT id, accepted_at FROM message WHERE transport = 'email' AND transport_reference = ?")
+    .bind(providerReference).first<{ id: string; accepted_at: string | null }>()
+  if (duplicate?.accepted_at) return
+  if (duplicate) {
+    const partialAttachments = await env.DB.prepare('SELECT object_key FROM attachment WHERE message_id = ?')
+      .bind(duplicate.id).all<{ object_key: string }>()
+    await Promise.all(partialAttachments.results.map((row) => env.ATTACHMENTS.delete(row.object_key)))
+    await env.DB.prepare('DELETE FROM message WHERE id = ?').bind(duplicate.id).run()
+  }
 
   const id = `msg_${await digest(providerReference, 32)}`
   const now = new Date()
@@ -37,8 +44,9 @@ export async function receiveEmail(
   const reserved = await env.DB.batch([
     env.DB.prepare(`
       INSERT OR IGNORE INTO message
-        (id, sender_mailbox_id, sender_kind, sender_address, subject, text_content, html_content, in_reply_to, transport, transport_reference, expires_at, created_at)
-      VALUES (?, NULL, 'email', ?, ?, ?, ?, NULL, 'email', ?, ?, ?)
+        (id, sender_mailbox_id, sender_kind, sender_address, subject, text_content, html_content,
+         in_reply_to, routing_key, transport, transport_reference, expires_at, accepted_at, created_at)
+      VALUES (?, NULL, 'email', ?, ?, ?, ?, NULL, NULL, 'email', ?, ?, NULL, ?)
     `).bind(id, message.from, parsed.subject ?? null, parsed.text ?? null, parsed.html || null, providerReference, expiresAt, now.toISOString()),
     env.DB.prepare(`
       INSERT OR IGNORE INTO message_recipient
@@ -76,6 +84,11 @@ export async function receiveEmail(
       ))
     }
     if (attachmentStatements.length > 0) await env.DB.batch(attachmentStatements)
+    const acceptedAt = new Date().toISOString()
+    await env.DB.batch([
+      env.DB.prepare('UPDATE message SET accepted_at = ? WHERE id = ? AND accepted_at IS NULL').bind(acceptedAt, id),
+      enqueueNotificationStatement(env.DB, mailbox.id, mailbox.agentSubject, id, null, acceptedAt),
+    ])
     console.log(JSON.stringify({ event: 'email_received', messageId: id, mailboxId: mailbox.id, attachmentCount: parsed.attachments.length }))
   } catch (error) {
     await Promise.all(storedKeys.map((key) => env.ATTACHMENTS.delete(key)))

@@ -23,6 +23,7 @@ export function openApi(origin: string, issuer: string) {
       content: { type: 'object', properties: { text: { type: 'string' }, html: { type: 'string' } } },
       inReplyTo: { type: ['string', 'null'], pattern: '^msg_[0-9a-f]{32}$' },
       transport: { type: 'string', enum: ['agent', 'email'] },
+      routingKey: { type: 'string', maxLength: 512, description: 'Opaque producer-supplied routing metadata. Inbox stores and forwards it without interpretation.' },
       attachments: { type: 'array', items: { type: 'object' } },
       createdAt: { type: 'string', format: 'date-time' },
       links: { type: 'object', additionalProperties: { type: 'string', format: 'uri' } },
@@ -36,11 +37,12 @@ export function openApi(origin: string, issuer: string) {
   }]))
   const version = { name: 'API-Version', in: 'header', required: true, schema: { type: 'string', const: API_VERSION, default: API_VERSION } }
   const security = (scope: string) => [{ RealmrootOAuth: [scope] }]
+  const serviceSecurity = (scope: string) => [{ RealmrootServiceOAuth: [scope] }]
   return {
     openapi: '3.1.0',
     info: { title: 'Agent Inbox API', version: API_VERSION, description: 'A transport-neutral mailbox for Realmroot Agents.' },
     servers: [{ url: `${origin}/api` }],
-    tags: [{ name: 'mailbox' }, { name: 'message' }],
+    tags: [{ name: 'mailbox' }, { name: 'message' }, { name: 'subscription' }],
     paths: {
       '/mailbox': {
         get: {
@@ -95,6 +97,45 @@ export function openApi(origin: string, issuer: string) {
           responses: { 200: { description: 'Attachment body.', headers: protectedResponseHeaders, content: { 'application/octet-stream': { schema: { type: 'string', format: 'binary' } } } }, ...errors },
         },
       },
+      '/subscriptions': {
+        get: {
+          operationId: 'listSubscriptions', tags: ['subscription'], 'x-cli-name': 'list', security: serviceSecurity(scopes.subscriptionsRead),
+          description: 'Lists notification Subscriptions owned by the authenticated Agency service identity. Callback bearer tokens are never returned.',
+          parameters: [version,
+            { name: 'pageSize', in: 'query', schema: { type: 'integer', minimum: 1, maximum: 100, default: 50 } },
+            { name: 'pageToken', in: 'query', schema: { type: 'string' } },
+          ],
+          responses: { 200: { description: 'Agency-owned notification Subscriptions.', headers: { Link: { $ref: '#/components/headers/Link' }, ...protectedResponseHeaders }, content: { 'application/json': { schema: { type: 'object', required: ['items', 'pagination'], properties: { items: { type: 'array', items: { $ref: '#/components/schemas/Subscription' } }, pagination: { $ref: '#/components/schemas/Pagination' } } } } } }, ...errors },
+        },
+      },
+      '/subscriptions/{subscriptionId}': {
+        get: {
+          operationId: 'getSubscription', tags: ['subscription'], 'x-cli-name': 'show', security: serviceSecurity(scopes.subscriptionsRead),
+          description: 'Returns one Agency-owned notification Subscription without its write-only callback bearer token.',
+          parameters: [version, { $ref: '#/components/parameters/SubscriptionId' }],
+          responses: { 200: { description: 'Notification Subscription.', headers: { ETag: { $ref: '#/components/headers/ETag' }, ...protectedResponseHeaders }, content: { 'application/json': { schema: { $ref: '#/components/schemas/Subscription' } } } }, ...errors },
+        },
+        put: {
+          operationId: 'replaceSubscription', tags: ['subscription'], 'x-cli-name': 'replace', security: serviceSecurity(scopes.subscriptionsManage),
+          description: 'Creates or completely replaces a client-identified Subscription. Creation requires If-None-Match: *. Replacement requires the current If-Match validator. Every request supplies the complete delivery configuration and callback bearer token; the token is encrypted at rest and never returned.',
+          parameters: [version, { $ref: '#/components/parameters/SubscriptionId' },
+            { name: 'If-Match', in: 'header', required: false, description: 'Required when replacing an existing Subscription.', schema: { type: 'string' } },
+            { name: 'If-None-Match', in: 'header', required: false, description: 'Must be * when creating a Subscription.', schema: { type: 'string', const: '*' } },
+          ],
+          requestBody: { required: true, content: { 'application/json': { schema: { $ref: '#/components/schemas/ReplaceSubscription' } } } },
+          responses: {
+            200: { description: 'Subscription replaced.', headers: { ETag: { $ref: '#/components/headers/ETag' }, Location: { $ref: '#/components/headers/Location' }, ...protectedResponseHeaders }, content: { 'application/json': { schema: { $ref: '#/components/schemas/Subscription' } } } },
+            201: { description: 'Subscription created.', headers: { ETag: { $ref: '#/components/headers/ETag' }, Location: { $ref: '#/components/headers/Location' }, ...protectedResponseHeaders }, content: { 'application/json': { schema: { $ref: '#/components/schemas/Subscription' } } } },
+            ...errors,
+          },
+        },
+        delete: {
+          operationId: 'deleteSubscription', tags: ['subscription'], 'x-cli-name': 'delete', security: serviceSecurity(scopes.subscriptionsManage),
+          description: 'Deletes a Subscription and its pending notification events. Requires the current If-Match validator.',
+          parameters: [version, { $ref: '#/components/parameters/SubscriptionId' }, { name: 'If-Match', in: 'header', required: true, schema: { type: 'string' } }],
+          responses: { 204: { description: 'Subscription deleted.', headers: protectedResponseHeaders }, ...errors },
+        },
+      },
     },
     components: {
       securitySchemes: {
@@ -103,8 +144,15 @@ export function openApi(origin: string, issuer: string) {
           'x-dpop-required': true,
           description: 'Realmroot OAuth access token. Agent requests require a DPoP-bound token and a fresh per-request proof.',
         },
+        RealmrootServiceOAuth: {
+          type: 'oauth2', flows: { clientCredentials: { tokenUrl: `${issuer}/oauth2/token`, scopes: scopeCatalog } },
+          description: 'Realmroot Bearer access token for the configured Agency M2M service identity. This authority manages Subscriptions only and does not grant Message access.',
+        },
       },
-      parameters: { MessageId: { name: 'messageId', in: 'path', required: true, schema: { type: 'string', pattern: '^msg_[0-9a-f]{32}$' } } },
+      parameters: {
+        MessageId: { name: 'messageId', in: 'path', required: true, schema: { type: 'string', pattern: '^msg_[0-9a-f]{32}$' } },
+        SubscriptionId: { name: 'subscriptionId', in: 'path', required: true, schema: { type: 'string', pattern: '^sub_[0-9a-f]{32}$' } },
+      },
       headers: {
         RequestId: { description: 'Server-generated request correlation identifier.', schema: { type: 'string' } },
         ApiVersion: { schema: { type: 'string', const: API_VERSION } },
@@ -119,7 +167,27 @@ export function openApi(origin: string, issuer: string) {
         Pagination: { type: 'object', required: ['pageSize'], properties: { pageSize: { type: 'integer' }, nextPageToken: { type: 'string' } } },
         Mailbox: { type: 'object', required: ['id', 'agent', 'addresses', 'createdAt', 'updatedAt', 'links'], properties: { id: { type: 'string' }, agent: { type: 'object' }, addresses: { type: 'object' }, createdAt: { type: 'string', format: 'date-time' }, updatedAt: { type: 'string', format: 'date-time' }, links: { type: 'object' } } },
         Message: message,
-        CreateMessage: { type: 'object', additionalProperties: false, required: ['recipients', 'content'], properties: { recipients: { type: 'array', minItems: 1, maxItems: 20, items: { type: 'string', pattern: '^agent:[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-7[0-9A-Fa-f]{3}-[89ABab][0-9A-Fa-f]{3}-[0-9A-Fa-f]{12}$' } }, subject: { type: ['string', 'null'] }, content: { type: 'object', properties: { text: { type: 'string' }, html: { type: 'string' } } }, inReplyTo: { type: ['string', 'null'], pattern: '^msg_[0-9a-f]{32}$' } } },
+        CreateMessage: { type: 'object', additionalProperties: false, required: ['recipients', 'content'], properties: { recipients: { type: 'array', minItems: 1, maxItems: 20, items: { type: 'string', pattern: '^agent:[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-7[0-9A-Fa-f]{3}-[89ABab][0-9A-Fa-f]{3}-[0-9A-Fa-f]{12}$' } }, subject: { type: ['string', 'null'] }, content: { type: 'object', properties: { text: { type: 'string' }, html: { type: 'string' } } }, inReplyTo: { type: ['string', 'null'], pattern: '^msg_[0-9a-f]{32}$' }, routingKey: { type: 'string', minLength: 1, maxLength: 512 } } },
+        Subscription: {
+          type: 'object',
+          required: ['id', 'agentId', 'events', 'delivery', 'createdAt', 'updatedAt', 'links'],
+          properties: {
+            id: { type: 'string', pattern: '^sub_[0-9a-f]{32}$' },
+            agentId: { type: 'string', format: 'uuid' },
+            events: { type: 'array', minItems: 1, uniqueItems: true, items: { type: 'string', enum: ['message.created'] } },
+            delivery: { type: 'object', required: ['url', 'authorization'], properties: { url: { type: 'string', format: 'uri', pattern: '^https://' }, authorization: { type: 'object', required: ['scheme'], properties: { scheme: { type: 'string', const: 'bearer' } } } } },
+            createdAt: { type: 'string', format: 'date-time' }, updatedAt: { type: 'string', format: 'date-time' },
+            links: { type: 'object', required: ['self'], properties: { self: { type: 'string', format: 'uri' } } },
+          },
+        },
+        ReplaceSubscription: {
+          type: 'object', additionalProperties: false, required: ['agentId', 'events', 'delivery'],
+          properties: {
+            agentId: { type: 'string', format: 'uuid' },
+            events: { type: 'array', minItems: 1, maxItems: 10, uniqueItems: true, items: { type: 'string', enum: ['message.created'] } },
+            delivery: { type: 'object', additionalProperties: false, required: ['url', 'authorization'], properties: { url: { type: 'string', format: 'uri', pattern: '^https://', maxLength: 2048 }, authorization: { type: 'object', additionalProperties: false, required: ['scheme', 'token'], properties: { scheme: { type: 'string', const: 'bearer' }, token: { type: 'string', minLength: 32, maxLength: 4096, writeOnly: true } } } } },
+          },
+        },
       },
     },
   }
