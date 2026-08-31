@@ -46,6 +46,8 @@ It will own:
   attachments, deliveries, and transport routing;
 - reliable acceptance, idempotency, delivery state, acknowledgement, retry,
   retention, and audit;
+- Agency-managed notification subscriptions with encrypted callback secrets and
+  persistent at-least-once HTTP delivery;
 - transport modules that map external communication systems to the canonical
   mailbox model.
 
@@ -84,6 +86,10 @@ The first implementation milestone will deliberately avoid external runtimes:
 
 Inbound Email Routing is the first external transport. Outbound email and
 Matrix remain later work. See the [roadmap](ROADMAP.md).
+
+Agency may also register a content-free notification Subscription for an Agent
+Mailbox. Inbox wakes that consumer reliably but never selects or creates a
+runtime Session.
 
 ## API and Restish
 
@@ -131,6 +137,7 @@ The standards assessment and current decisions live in
 - [Architecture](docs/architecture.md)
 - [Resource model](docs/resource-model.md)
 - [Protocol direction](docs/protocol.md)
+- [Notification subscriptions](docs/notifications.md)
 - [Email transport](docs/transports/email.md)
 - [Matrix transport](docs/transports/matrix.md)
 - [Roadmap](ROADMAP.md)

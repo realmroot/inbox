@@ -5,6 +5,8 @@ export const API_VERSION = '2026-08-11'
 
 export const addressSchema = agentAddressSchema
 export const messageIdSchema = z.string().regex(/^msg_[0-9a-f]{32}$/)
+export const subscriptionIdSchema = z.string().regex(/^sub_[0-9a-f]{32}$/)
+export const notificationEventTypeSchema = z.literal('message.created')
 
 export const createMessageSchema = z.object({
   recipients: z.array(addressSchema).min(1).max(20),
@@ -16,6 +18,25 @@ export const createMessageSchema = z.object({
     message: 'At least one content representation is required.',
   }),
   inReplyTo: messageIdSchema.nullable().optional(),
+  routingKey: z.string().min(1).max(512).optional(),
+}).strict()
+
+export const replaceSubscriptionSchema = z.object({
+  agentId: z.uuidv7(),
+  events: z.array(notificationEventTypeSchema).min(1).max(10).refine(
+    (events) => new Set(events).size === events.length,
+    { message: 'Subscription event types must be unique.' },
+  ),
+  delivery: z.object({
+    url: z.url().max(2048).refine((url) => {
+      const parsed = new URL(url)
+      return parsed.protocol === 'https:' && parsed.username === '' && parsed.password === '' && parsed.hash === ''
+    }, { message: 'Delivery URL must use HTTPS and contain no credentials or fragment.' }),
+    authorization: z.object({
+      scheme: z.literal('bearer'),
+      token: z.string().min(32).max(4096),
+    }).strict(),
+  }).strict(),
 }).strict()
 
 export const updateMessageSchema = z.object({
@@ -33,6 +54,12 @@ export const listMessagesQuerySchema = z.object({
   pageToken: z.string().max(2048).optional(),
 }).strict()
 
+export const listSubscriptionsQuerySchema = z.object({
+  pageSize: z.coerce.number().int().min(1).max(100).default(50),
+  pageToken: z.string().max(2048).optional(),
+}).strict()
+
 export type CreateMessageInput = z.infer<typeof createMessageSchema>
+export type ReplaceSubscriptionInput = z.infer<typeof replaceSubscriptionSchema>
 export type UpdateMailboxInput = z.infer<typeof updateMailboxSchema>
 export type UpdateMessageInput = z.infer<typeof updateMessageSchema>

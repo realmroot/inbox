@@ -31,6 +31,8 @@ export default defineConfig({
           OIDC_ISSUER: 'https://id.test/api/auth',
           EMAIL_DOMAIN: 'agents.test',
           OIDC_JWKS: '{"keys":[]}',
+          AGENCY_CLIENT_ID: 'realmroot-agency',
+          DELIVERY_SECRET_KEY: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',
           TEST_MIGRATIONS: await readD1Migrations(path.join(import.meta.dirname, 'migrations')),
         },
       },

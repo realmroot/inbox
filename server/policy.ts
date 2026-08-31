@@ -4,6 +4,8 @@ export const scopes = {
   messagesRead: 'messages:read',
   messagesCreate: 'messages:create',
   messagesManage: 'messages:manage',
+  subscriptionsRead: 'subscriptions:read',
+  subscriptionsManage: 'subscriptions:manage',
 } as const
 
 export const operations = {
@@ -14,6 +16,10 @@ export const operations = {
   getMessage: { operationId: 'getMessage', scope: scopes.messagesRead },
   updateMessage: { operationId: 'updateMessage', scope: scopes.messagesManage },
   getMessageAttachment: { operationId: 'getMessageAttachment', scope: scopes.messagesRead },
+  listSubscriptions: { operationId: 'listSubscriptions', scope: scopes.subscriptionsRead },
+  getSubscription: { operationId: 'getSubscription', scope: scopes.subscriptionsRead },
+  replaceSubscription: { operationId: 'replaceSubscription', scope: scopes.subscriptionsManage },
+  deleteSubscription: { operationId: 'deleteSubscription', scope: scopes.subscriptionsManage },
 } as const
 
 export type OperationId = (typeof operations)[keyof typeof operations]['operationId']
@@ -32,4 +38,6 @@ export const scopeCatalog = {
   [scopes.messagesRead]: 'Read messages available to the current Agent mailbox.',
   [scopes.messagesCreate]: 'Create messages from the current Agent mailbox.',
   [scopes.messagesManage]: 'Manage mailbox-local message state.',
+  [scopes.subscriptionsRead]: 'Read notification subscriptions owned by the Agency service.',
+  [scopes.subscriptionsManage]: 'Create, replace, and delete notification subscriptions owned by the Agency service.',
 }

@@ -37,3 +37,11 @@ Feature: Agent Inbox
     And the Agent can list it as an inbound email Message
     And the Agent can download the attachment through the protected Message resource
     And all email data expires after 30 days
+
+  @journey:runtime-notification @entrypoint:agency
+  Scenario: Agency receives a reliable Message notification without content authority
+    Given Agency manages a Subscription for one Agent through its Realmroot M2M identity
+    When Inbox commits a Message for that Agent
+    Then Inbox persistently delivers a content-free notification with the registered bearer token
+    And transient failures retry with the same event identifier
+    And the Agent still reads Message content separately through Inbox

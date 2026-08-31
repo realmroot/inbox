@@ -2,6 +2,7 @@ import type { AgentPrincipal } from './auth'
 import type { AgentDirectory, AgentIdentity } from './agent-directory'
 import type { CreateMessageInput, UpdateMailboxInput, UpdateMessageInput } from '../shared/contracts'
 import { conflict, forbidden, notFound, preconditionFailed, preconditionRequired } from './errors'
+import { enqueueNotificationStatement } from './notifications'
 
 export interface Mailbox {
   id: string
@@ -37,6 +38,7 @@ interface MessageRow {
   html_content: string | null
   in_reply_to: string | null
   transport: 'agent' | 'email'
+  routing_key: string | null
   created_at: string
   direction: 'inbound' | 'outbound' | 'both'
   state: 'unread' | 'read' | 'archived' | null
@@ -67,6 +69,7 @@ export interface MessageRepresentation {
   content: { text?: string; html?: string }
   inReplyTo: string | null
   transport: 'agent' | 'email'
+  routingKey?: string
   attachments: Array<{
     id: string
     filename: string | null
@@ -187,14 +190,27 @@ export async function createMessage(
   const statements = [
     db.prepare(`
       INSERT OR IGNORE INTO message
-        (id, sender_mailbox_id, sender_kind, sender_address, subject, text_content, html_content, in_reply_to, transport, created_at)
-      VALUES (?, ?, 'agent', ?, ?, ?, ?, ?, 'agent', ?)
-    `).bind(id, sender.id, `agent:${principal.agent.subject}`, input.subject ?? null, input.content.text ?? null, input.content.html ?? null, input.inReplyTo ?? null, now),
+        (id, sender_mailbox_id, sender_kind, sender_address, subject, text_content, html_content,
+         in_reply_to, routing_key, transport, accepted_at, created_at)
+      VALUES (?, ?, 'agent', ?, ?, ?, ?, ?, ?, 'agent', ?, ?)
+    `).bind(
+      id, sender.id, `agent:${principal.agent.subject}`, input.subject ?? null,
+      input.content.text ?? null, input.content.html ?? null, input.inReplyTo ?? null,
+      input.routingKey ?? null, now, now,
+    ),
     ...recipients.map((recipient) => db.prepare(`
       INSERT OR IGNORE INTO message_recipient
         (message_id, mailbox_id, address, state, delivery_status, received_at)
       VALUES (?, ?, ?, 'unread', 'delivered', ?)
     `).bind(id, recipient.id, `agent:${recipient.agentSubject}`, now)),
+    ...recipients.map((recipient) => enqueueNotificationStatement(
+      db,
+      recipient.id,
+      recipient.agentSubject,
+      id,
+      input.routingKey ?? null,
+      now,
+    )),
     db.prepare(`
       INSERT OR IGNORE INTO idempotency_record (mailbox_id, key, request_hash, message_id, created_at)
       VALUES (?, ?, ?, ?, ?)
@@ -231,7 +247,7 @@ export async function listMessages(
       mr.state, mr.version AS recipient_version
     FROM message m
     LEFT JOIN message_recipient mr ON mr.message_id = m.id AND mr.mailbox_id = ?
-    WHERE ${conditions.join(' AND ')}
+    WHERE m.accepted_at IS NOT NULL AND ${conditions.join(' AND ')}
     ORDER BY m.created_at DESC, m.id DESC
     LIMIT ?
   `).bind(mailboxId, mailboxId, mailboxId, ...values).all<MessageRow>()
@@ -252,7 +268,7 @@ export async function getMessage(db: D1Database, mailboxId: string, messageId: s
       mr.state, mr.version AS recipient_version
     FROM message m
     LEFT JOIN message_recipient mr ON mr.message_id = m.id AND mr.mailbox_id = ?
-    WHERE m.id = ? AND (m.sender_mailbox_id = ? OR mr.mailbox_id = ?)
+    WHERE m.id = ? AND m.accepted_at IS NOT NULL AND (m.sender_mailbox_id = ? OR mr.mailbox_id = ?)
   `).bind(mailboxId, mailboxId, mailboxId, messageId, mailboxId, mailboxId).first<MessageRow>()
   if (!row) throw notFound('Message not found.')
   return representMessage(db, row, origin)
@@ -321,7 +337,7 @@ async function getMessageRow(db: D1Database, mailboxId: string, messageId: strin
            WHEN m.sender_mailbox_id = ? THEN 'outbound' ELSE 'inbound' END AS direction,
       mr.state, mr.version AS recipient_version
     FROM message m LEFT JOIN message_recipient mr ON mr.message_id = m.id AND mr.mailbox_id = ?
-    WHERE m.id = ? AND (m.sender_mailbox_id = ? OR mr.mailbox_id = ?)
+    WHERE m.id = ? AND m.accepted_at IS NOT NULL AND (m.sender_mailbox_id = ? OR mr.mailbox_id = ?)
   `).bind(mailboxId, mailboxId, mailboxId, messageId, mailboxId, mailboxId).first<MessageRow>()
   if (!row) throw notFound('Message not found.')
   return row
@@ -345,6 +361,7 @@ async function representMessage(db: D1Database, row: MessageRow, origin: string)
     },
     inReplyTo: row.in_reply_to,
     transport: row.transport,
+    ...(row.routing_key !== null ? { routingKey: row.routing_key } : {}),
     attachments: attachmentResult.results.map((attachment) => ({
       id: attachment.id,
       filename: attachment.filename,

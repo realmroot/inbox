@@ -21,6 +21,7 @@ therefore includes:
 | errors | RFC 9457 Problem Details | yes |
 | request correlation | W3C Trace Context plus a response request ID | yes |
 | HTTP conditional writes | validators and RFC 9110 preconditions | yes |
+| runtime wake notifications | M2M-managed Subscription plus authenticated HTTP push | yes |
 
 Exact conformance is an implementation gate, not a documentation claim.
 
@@ -94,3 +95,12 @@ When a v1 protocol is selected, the repository will publish:
 
 The reference implementation must consume the same published contract and may
 not rely on undocumented private behavior.
+
+## Runtime notification profile
+
+Agency uses its existing Realmroot M2M service identity only to manage Inbox
+Subscription resources. Callback delivery uses the bearer token Agency places
+in that Subscription; Inbox does not mint or obtain a reverse Agency
+credential. Notifications contain resource identifiers and opaque routing
+metadata, never Message content. The complete profile is documented in
+[Notification subscriptions](notifications.md).

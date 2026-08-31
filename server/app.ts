@@ -2,12 +2,25 @@ import { Hono, type Context, type Next } from 'hono'
 import { bodyLimit } from 'hono/body-limit'
 import { cors } from 'hono/cors'
 import { secureHeaders } from 'hono/secure-headers'
-import { authenticateAgent, type AgentPrincipal, type Authenticator } from './auth'
+import {
+  authenticateAgencyService,
+  authenticateAgent,
+  type AgentPrincipal,
+  type Authenticator,
+  type ServiceAuthenticator,
+  type ServicePrincipal,
+} from './auth'
 import { createRealmrootAgentDirectory, type AgentDirectory } from './agent-directory'
 import { ApiError, badRequest } from './errors'
 import { openApi } from './openapi'
 import { metadataPath, metadataUrl, protectedResourceMetadata } from './protected-resource'
 import { operations, type OperationId } from './policy'
+import {
+  deleteSubscription,
+  getSubscription,
+  listSubscriptions,
+  replaceSubscription,
+} from './subscriptions'
 import {
   createMessage,
   getAttachment,
@@ -24,18 +37,22 @@ import {
   API_VERSION,
   createMessageSchema,
   listMessagesQuerySchema,
+  listSubscriptionsQuerySchema,
+  replaceSubscriptionSchema,
+  subscriptionIdSchema,
   updateMailboxSchema,
   updateMessageSchema,
 } from '../shared/contracts'
 
 type AppEnv = {
   Bindings: Cloudflare.Env
-  Variables: { requestId: string; principal: AgentPrincipal }
+  Variables: { requestId: string; principal: AgentPrincipal; servicePrincipal: ServicePrincipal }
 }
 
 export function createApp(
   authenticate: Authenticator = authenticateAgent,
   agentDirectory: (env: Cloudflare.Env) => AgentDirectory = (env) => createRealmrootAgentDirectory(env.REALMROOT),
+  authenticateService: ServiceAuthenticator = authenticateAgencyService,
 ) {
   const app = new Hono<AppEnv>()
 
@@ -53,8 +70,8 @@ export function createApp(
   app.use('*', secureHeaders())
   app.use('/api/*', cors({
     origin: '*',
-    allowHeaders: ['Authorization', 'Content-Type', 'DPoP', 'Idempotency-Key', 'If-Match', 'API-Version', 'traceparent', 'tracestate'],
-    allowMethods: ['GET', 'POST', 'PATCH', 'OPTIONS'],
+    allowHeaders: ['Authorization', 'Content-Type', 'DPoP', 'Idempotency-Key', 'If-Match', 'If-None-Match', 'API-Version', 'traceparent', 'tracestate'],
+    allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     exposeHeaders: ['API-Version', 'ETag', 'Idempotency-Replayed', 'Link', 'Location', 'Request-Id', 'WWW-Authenticate'],
     maxAge: 86400,
   }))
@@ -82,6 +99,8 @@ export function createApp(
   app.use('/api/mailbox', versionMiddleware)
   app.use('/api/messages', versionMiddleware)
   app.use('/api/messages/*', versionMiddleware)
+  app.use('/api/subscriptions', versionMiddleware)
+  app.use('/api/subscriptions/*', versionMiddleware)
 
   app.get('/api/mailbox', authorize(authenticate, operations.getMailbox.operationId), async (c) => {
     const mailbox = await currentMailbox(c, agentDirectory(c.env))
@@ -157,6 +176,47 @@ export function createApp(
     return new Response(object.body, { headers })
   })
 
+  app.get('/api/subscriptions', authorizeService(authenticateService, operations.listSubscriptions.operationId), async (c) => {
+    const parsed = listSubscriptionsQuerySchema.safeParse(c.req.query())
+    if (!parsed.success) throw badRequest(parsed.error.issues.map((issue) => issue.message).join('; '))
+    const result = await listSubscriptions(c.env.DB, c.get('servicePrincipal'), c.env.APP_ORIGIN, parsed.data)
+    if (result.pagination.nextPageToken) {
+      const next = new URL(c.req.url)
+      next.searchParams.set('pageToken', result.pagination.nextPageToken)
+      c.header('Link', `<${next.href}>; rel="next"`)
+    }
+    return c.json(result)
+  })
+  app.get('/api/subscriptions/:subscriptionId', authorizeService(authenticateService, operations.getSubscription.operationId), async (c) => {
+    const subscriptionId = parsedSubscriptionId(c)
+    const result = await getSubscription(c.env.DB, c.get('servicePrincipal'), subscriptionId, c.env.APP_ORIGIN)
+    c.header('ETag', result.etag)
+    return c.json(result.subscription)
+  })
+  app.put('/api/subscriptions/:subscriptionId', authorizeService(authenticateService, operations.replaceSubscription.operationId), async (c) => {
+    const subscriptionId = parsedSubscriptionId(c)
+    const input = await parseJson(c, replaceSubscriptionSchema)
+    const result = await replaceSubscription(
+      c.env.DB,
+      c.get('servicePrincipal'),
+      subscriptionId,
+      input,
+      c.req.header('If-Match'),
+      c.req.header('If-None-Match'),
+      agentDirectory(c.env),
+      c.env.EMAIL_DOMAIN,
+      c.env.APP_ORIGIN,
+      c.env.DELIVERY_SECRET_KEY,
+    )
+    c.header('ETag', result.etag)
+    c.header('Location', `${c.env.APP_ORIGIN}/api/subscriptions/${subscriptionId}`)
+    return c.json(result.subscription, result.created ? 201 : 200)
+  })
+  app.delete('/api/subscriptions/:subscriptionId', authorizeService(authenticateService, operations.deleteSubscription.operationId), async (c) => {
+    await deleteSubscription(c.env.DB, c.get('servicePrincipal'), parsedSubscriptionId(c), c.req.header('If-Match'))
+    return c.body(null, 204)
+  })
+
   app.notFound((c) => problem(c, new ApiError(404, 'https://inbox.realmroot.dev/problems/not-found', 'Not found', 'Resource not found.')))
   app.onError((error, c) => {
     const apiError = error instanceof ApiError
@@ -171,6 +231,13 @@ export function createApp(
 function authorize(authenticate: Authenticator, operationId: OperationId) {
   return async (c: Context<AppEnv>, next: Next) => {
     c.set('principal', await authenticate(c.req.raw, c.env, operationId))
+    await next()
+  }
+}
+
+function authorizeService(authenticate: ServiceAuthenticator, operationId: OperationId) {
+  return async (c: Context<AppEnv>, next: Next) => {
+    c.set('servicePrincipal', await authenticate(c.req.raw, c.env, operationId))
     await next()
   }
 }
@@ -206,6 +273,12 @@ function requiredParam(c: Context<AppEnv>, name: string) {
   const value = c.req.param(name)
   if (!value) throw badRequest(`${name} is required.`)
   return value
+}
+
+function parsedSubscriptionId(c: Context<AppEnv>) {
+  const parsed = subscriptionIdSchema.safeParse(requiredParam(c, 'subscriptionId'))
+  if (!parsed.success) throw badRequest('subscriptionId is invalid.')
+  return parsed.data
 }
 
 function problem(c: Context<AppEnv>, error: ApiError) {
