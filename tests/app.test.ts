@@ -1,38 +1,39 @@
 import { env } from 'cloudflare:test'
 import { describe, expect, it, vi } from 'vitest'
 import { createApp } from '../server/app'
-import type { Authenticator, MessageAuthenticator, ServiceAuthenticator } from '../server/auth'
+import type { Authenticator } from '../server/auth'
 import type { AgentDirectory } from '../server/agent-directory'
 import { receiveEmail } from '../server/email'
 import { API_VERSION } from '../shared/contracts'
 import { createHttpNotificationTransport, deliverDueNotifications } from '../server/notifications'
 
 const authenticate: Authenticator = async (request, runtimeEnv) => {
+  const authorization = request.headers.get('authorization')
+  if (authorization === 'Bearer agency-token') {
+    return {
+      kind: 'service',
+      issuer: runtimeEnv.OIDC_ISSUER,
+      subject: 'agency-service',
+      clientId: runtimeEnv.AGENCY_CLIENT_ID,
+      scopes: ['subscriptions:read', 'subscriptions:manage'],
+    }
+  }
+  if (authorization === 'Bearer machine-message-token') {
+    return {
+      kind: 'service',
+      issuer: runtimeEnv.OIDC_ISSUER,
+      subject: 'agent-kanban-service',
+      clientId: 'agent-kanban',
+      scopes: ['messages:create'],
+    }
+  }
   const subject = request.headers.get('x-test-agent')
   if (!subject) throw new Error('x-test-agent is required in tests')
   return {
+    kind: 'agent',
     owner: { issuer: runtimeEnv.OIDC_ISSUER, subject: `controller-${subject}` },
     agent: { issuer: runtimeEnv.OIDC_ISSUER, subject },
-    scopes: [],
-  }
-}
-
-const authenticateService: ServiceAuthenticator = async (_request, runtimeEnv) => ({
-  issuer: runtimeEnv.OIDC_ISSUER,
-  subject: 'agency-service',
-  clientId: runtimeEnv.AGENCY_CLIENT_ID,
-  scopes: ['subscriptions:read', 'subscriptions:manage'],
-})
-
-const authenticateMessages: MessageAuthenticator = async (request, runtimeEnv, operationId) => {
-  if (request.headers.get('authorization') !== 'Bearer machine-message-token' || operationId !== 'createMessage') {
-    throw new Error('machine message authentication is required in tests')
-  }
-  return {
-    issuer: runtimeEnv.OIDC_ISSUER,
-    subject: 'agent-kanban-service',
-    clientId: 'agent-kanban',
-    scopes: ['messages:create'],
+    scopes: ['mailbox:read', 'mailbox:manage', 'messages:read', 'messages:create', 'messages:manage'],
   }
 }
 
@@ -56,17 +57,17 @@ const agentDirectory: AgentDirectory = {
     return subject ? { issuer, subject, username } : null
   },
 }
-const app = createApp(authenticate, () => agentDirectory, authenticateService)
-const machineMessageApp = createApp(authenticate, () => agentDirectory, authenticateService, authenticateMessages)
+const app = createApp(authenticate, () => agentDirectory)
 const headers = (agent: string, extra: HeadersInit = {}) => ({
   'API-Version': API_VERSION,
   'x-test-agent': agent,
   ...Object.fromEntries(new Headers(extra)),
 })
-const serviceHeaders = (extra: HeadersInit = {}) => ({
-  'API-Version': API_VERSION,
-  ...Object.fromEntries(new Headers(extra)),
-})
+const serviceHeaders = (extra: HeadersInit = {}) => {
+  const result = new Headers({ 'API-Version': API_VERSION, Authorization: 'Bearer agency-token' })
+  for (const [name, value] of new Headers(extra)) result.set(name, value)
+  return result
+}
 
 describe('Agent Inbox API', () => {
   it('publishes Realmroot discovery and a resource-only Restish contract [spec: inbox/resource-discovery]', async () => {
@@ -163,12 +164,13 @@ describe('Agent Inbox API', () => {
       items: [{ id: subscriptionId, delivery: { authorization: { scheme: 'bearer' } } }],
       pagination: { pageSize: 10 },
     })
-    const otherServiceApp = createApp(authenticate, () => agentDirectory, async (_request, runtimeEnv) => ({
+    const otherServiceApp = createApp(async (_request, runtimeEnv) => ({
+      kind: 'service',
       issuer: runtimeEnv.OIDC_ISSUER,
       subject: 'other-service',
       clientId: runtimeEnv.AGENCY_CLIENT_ID,
       scopes: ['subscriptions:read'],
-    }))
+    }), () => agentDirectory)
     const concealed = await otherServiceApp.request(`https://inbox.test/api/subscriptions/${subscriptionId}`, {
       headers: serviceHeaders(),
     }, env)
@@ -328,7 +330,7 @@ describe('Agent Inbox API', () => {
         routingKey: 'agent-kanban:task:task-a',
       }),
     }
-    const created = await machineMessageApp.request('https://inbox.test/api/messages', request, env)
+    const created = await app.request('https://inbox.test/api/messages', request, env)
     expect(created.status).toBe(201)
     expect(created.headers.get('idempotency-replayed')).toBe('false')
     const serviceMessage = await created.json<{ id: string; sender: { kind: string; address: string }; direction: string }>()
@@ -337,7 +339,7 @@ describe('Agent Inbox API', () => {
       sender: { kind: 'service', address: 'service:agent-kanban' },
     })
 
-    const received = await machineMessageApp.request('https://inbox.test/api/messages?direction=inbound', {
+    const received = await app.request('https://inbox.test/api/messages?direction=inbound', {
       headers: headers(betaSubject),
     }, env)
     expect(received.status).toBe(200)
@@ -345,12 +347,12 @@ describe('Agent Inbox API', () => {
       items: [expect.objectContaining({ id: serviceMessage.id, direction: 'inbound', sender: serviceMessage.sender })],
     })
 
-    const replay = await machineMessageApp.request('https://inbox.test/api/messages', request, env)
+    const replay = await app.request('https://inbox.test/api/messages', request, env)
     expect(replay.status).toBe(200)
     expect(replay.headers.get('idempotency-replayed')).toBe('true')
     await expect(replay.json()).resolves.toEqual(serviceMessage)
 
-    const conflictResponse = await machineMessageApp.request('https://inbox.test/api/messages', {
+    const conflictResponse = await app.request('https://inbox.test/api/messages', {
       ...request,
       body: JSON.stringify({ recipients: [`agent:${betaSubject}`], content: { text: 'Different content.' } }),
     }, env)
@@ -373,7 +375,7 @@ describe('Agent Inbox API', () => {
       ['sub_11111111111111111111111111111111', betaSubject],
       ['sub_22222222222222222222222222222222', emailSubject],
     ] as const) {
-      const subscription = await machineMessageApp.request(`https://inbox.test/api/subscriptions/${subscriptionId}`, {
+      const subscription = await app.request(`https://inbox.test/api/subscriptions/${subscriptionId}`, {
         method: 'PUT',
         headers: serviceHeaders({ 'Content-Type': 'application/json', 'If-None-Match': '*' }),
         body: JSON.stringify({
@@ -393,7 +395,7 @@ describe('Agent Inbox API', () => {
       { recipients: [`agent:${betaSubject}`], content: { text: 'Beta wins' }, routingKey: 'candidate-beta' },
       { recipients: [`agent:${emailSubject}`], content: { text: 'Email wins' }, routingKey: 'candidate-email' },
     ]
-    const responses = await Promise.all(candidates.map((body) => machineMessageApp.request('https://inbox.test/api/messages', {
+    const responses = await Promise.all(candidates.map((body) => app.request('https://inbox.test/api/messages', {
       method: 'POST',
       headers: serviceHeaders({
         Authorization: 'Bearer machine-message-token',
@@ -421,7 +423,7 @@ describe('Agent Inbox API', () => {
   })
 
   it('atomically replays one concurrent service Message for the same client key and payload', async () => {
-    const subscription = await machineMessageApp.request(
+    const subscription = await app.request(
       'https://inbox.test/api/subscriptions/sub_33333333333333333333333333333333',
       {
         method: 'PUT',
@@ -444,7 +446,7 @@ describe('Agent Inbox API', () => {
       content: { text: 'Create this service Message once.' },
       routingKey: 'concurrent-identical-payload',
     })
-    const responses = await Promise.all(Array.from({ length: 2 }, () => machineMessageApp.request(
+    const responses = await Promise.all(Array.from({ length: 2 }, () => app.request(
       'https://inbox.test/api/messages',
       {
         method: 'POST',

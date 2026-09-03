@@ -12,42 +12,39 @@ import {
 } from 'jose'
 
 export interface AgentPrincipal {
+  kind: 'agent'
   owner: { issuer: string; subject: string }
   agent: { issuer: string; subject: string }
   scopes: readonly string[]
 }
 
 export interface ServicePrincipal {
+  kind: 'service'
   issuer: string
   subject: string
   clientId: string
   scopes: readonly string[]
 }
 
+export type Principal = AgentPrincipal | ServicePrincipal
+
 const realmrootCliClientId = 'realmroot-cli'
 
 export type Authenticator = (
   request: Request,
   env: Cloudflare.Env,
-  operationId: OperationId,
-) => Promise<AgentPrincipal>
+) => Promise<Principal>
 
-export type ServiceAuthenticator = (
-  request: Request,
-  env: Cloudflare.Env,
-  operationId: OperationId,
-) => Promise<ServicePrincipal>
+export const authenticatePrincipal: Authenticator = async (request, env) => {
+  const authorization = request.headers.get('authorization') ?? ''
+  if (/^DPoP\s+/i.test(authorization)) return authenticateAgent(request, env)
+  if (/^Bearer\s+/i.test(authorization)) return authenticateService(request, env)
+  throw unauthorized('Realmroot DPoP or Bearer access token is required.', {
+    'WWW-Authenticate': 'DPoP, Bearer',
+  })
+}
 
-export type MessagePrincipal = AgentPrincipal | ServicePrincipal
-
-export type MessageAuthenticator = (
-  request: Request,
-  env: Cloudflare.Env,
-  operationId: OperationId,
-) => Promise<MessagePrincipal>
-
-export const authenticateAgent: Authenticator = async (request, env, operationId) => {
-  const requiredScope = operationPolicy(operationId).scope
+export const authenticateAgent = async (request: Request, env: Cloudflare.Env): Promise<AgentPrincipal> => {
   const token = authorizationToken(request)
   const { payload, protectedHeader } = await jwtVerify(token, await keySet(env), {
     issuer: env.OIDC_ISSUER,
@@ -59,38 +56,20 @@ export const authenticateAgent: Authenticator = async (request, env, operationId
   if (protectedHeader.typ !== 'at+jwt') throw agentUnauthorized('Agent access token type is invalid.')
   if (typeof payload.sub !== 'string') throw agentUnauthorized('Agent access token has no controlling subject.')
 
-  const grantedScopes = typeof payload.scope === 'string' ? payload.scope.split(/\s+/).filter(Boolean) : []
-  if (!grantedScopes.includes(requiredScope)) throw insufficientScope(requiredScope)
-
   const confirmation = payload.cnf as { jkt?: unknown } | undefined
   if (typeof confirmation?.jkt !== 'string') throw agentUnauthorized('Agent access token is not DPoP-bound.')
   await verifyDpopProof(request, token, confirmation.jkt, payload.iss!, env.DB)
 
   const agent = resolveAgent(payload, env.OIDC_ISSUER)
   return {
+    kind: 'agent',
     owner: { issuer: env.OIDC_ISSUER, subject: payload.sub },
     agent,
-    scopes: grantedScopes,
+    scopes: tokenScopes(payload),
   }
 }
 
-export const authenticateAgencyService: ServiceAuthenticator = async (request, env, operationId) => {
-  const requiredScope = operationPolicy(operationId).scope
-  const match = request.headers.get('authorization')?.match(/^Bearer\s+(.+)$/i)
-  if (!match?.[1]) throw serviceUnauthorized('Realmroot Bearer access token is required.')
-  const { payload, protectedHeader } = await jwtVerify(match[1], await keySet(env), {
-    issuer: env.OIDC_ISSUER,
-    audience: `${env.APP_ORIGIN}/api`,
-    algorithms: ['EdDSA', 'ES256', 'RS256'],
-  }).catch(() => {
-    throw serviceUnauthorized('Agency service access token is invalid.')
-  })
-  if (protectedHeader.typ !== 'at+jwt') throw serviceUnauthorized('Agency service access token type is invalid.')
-  return resolveAgencyService(payload, env, requiredScope)
-}
-
-export const authenticateMessageService: ServiceAuthenticator = async (request, env, operationId) => {
-  const requiredScope = operationPolicy(operationId).scope
+export const authenticateService = async (request: Request, env: Cloudflare.Env): Promise<ServicePrincipal> => {
   const match = request.headers.get('authorization')?.match(/^Bearer\s+(.+)$/i)
   if (!match?.[1]) throw serviceUnauthorized('Realmroot Bearer access token is required.')
   const { payload, protectedHeader } = await jwtVerify(match[1], await keySet(env), {
@@ -104,24 +83,33 @@ export const authenticateMessageService: ServiceAuthenticator = async (request, 
   if (typeof payload.sub !== 'string' || typeof payload.client_id !== 'string' || payload.act !== undefined || payload.cnf !== undefined) {
     throw serviceUnauthorized('Service identity is invalid.')
   }
-  const grantedScopes = typeof payload.scope === 'string' ? payload.scope.split(/\s+/).filter(Boolean) : []
-  if (!grantedScopes.includes(requiredScope)) throw serviceInsufficientScope(requiredScope)
-  return { issuer: env.OIDC_ISSUER, subject: payload.sub, clientId: payload.client_id, scopes: grantedScopes }
+  return {
+    kind: 'service',
+    issuer: env.OIDC_ISSUER,
+    subject: payload.sub,
+    clientId: payload.client_id,
+    scopes: tokenScopes(payload),
+  }
 }
 
-export function resolveAgencyService(
-  payload: JWTPayload,
-  env: { OIDC_ISSUER: string; AGENCY_CLIENT_ID: string },
-  requiredScope: string,
-): ServicePrincipal {
-  if (!env.AGENCY_CLIENT_ID) throw new Error('AGENCY_CLIENT_ID is required.')
-  if (typeof payload.sub !== 'string') throw serviceUnauthorized('Agency service access token has no subject.')
-  if (payload.client_id !== env.AGENCY_CLIENT_ID || payload.act !== undefined || payload.cnf !== undefined) {
-    throw serviceUnauthorized('Agency service identity is invalid.')
+export function authorizePrincipal(principal: Principal, env: Cloudflare.Env, operationId: OperationId) {
+  const policy = operationPolicy(operationId)
+  if (!policy.principalKinds.includes(principal.kind)) {
+    throw forbidden(`A ${principal.kind} principal cannot perform ${operationId}.`)
   }
-  const grantedScopes = typeof payload.scope === 'string' ? payload.scope.split(/\s+/).filter(Boolean) : []
-  if (!grantedScopes.includes(requiredScope)) throw serviceInsufficientScope(requiredScope)
-  return { issuer: env.OIDC_ISSUER, subject: payload.sub, clientId: env.AGENCY_CLIENT_ID, scopes: grantedScopes }
+  if (!principal.scopes.includes(policy.scope)) {
+    throw principal.kind === 'agent' ? insufficientScope(policy.scope) : serviceInsufficientScope(policy.scope)
+  }
+  if (policy.serviceClient === 'agency') {
+    if (!env.AGENCY_CLIENT_ID) throw new Error('AGENCY_CLIENT_ID is required.')
+    if (principal.kind !== 'service' || principal.clientId !== env.AGENCY_CLIENT_ID) {
+      throw forbidden('The Agency service identity is required.')
+    }
+  }
+}
+
+function tokenScopes(payload: JWTPayload) {
+  return typeof payload.scope === 'string' ? payload.scope.split(/\s+/).filter(Boolean) : []
 }
 
 function authorizationToken(request: Request) {
