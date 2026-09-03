@@ -36,7 +36,7 @@ export const scopeCatalog = {
   [scopes.mailboxRead]: 'Read the current Agent mailbox.',
   [scopes.mailboxManage]: 'Manage the current Agent mailbox alias.',
   [scopes.messagesRead]: 'Read messages available to the current Agent mailbox.',
-  [scopes.messagesCreate]: 'Create messages from the current Agent mailbox.',
+  [scopes.messagesCreate]: 'Create Messages as the current Agent or an authorized service.',
   [scopes.messagesManage]: 'Manage mailbox-local message state.',
   [scopes.subscriptionsRead]: 'Read notification subscriptions owned by the Agency service.',
   [scopes.subscriptionsManage]: 'Create, replace, and delete notification subscriptions owned by the Agency service.',

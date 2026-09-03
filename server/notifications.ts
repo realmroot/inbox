@@ -54,6 +54,32 @@ export function enqueueNotificationStatement(
   `).bind(agentId, messageId, routingKey, occurredAt, occurredAt, occurredAt, occurredAt, mailboxId)
 }
 
+export function enqueueServiceNotificationStatement(
+  db: D1Database,
+  mailboxId: string,
+  agentId: string,
+  messageId: string,
+  routingKey: string | null,
+  occurredAt: string,
+  clientId: string,
+  idempotencyKey: string,
+  requestHash: string,
+) {
+  return db.prepare(`
+    INSERT OR IGNORE INTO notification_event
+      (id, subscription_id, type, agent_id, message_id, routing_key, occurred_at, status,
+       attempt_count, next_attempt_at, created_at, updated_at)
+    SELECT 'evt_' || lower(hex(randomblob(16))), s.id, 'message.created', ?, ?, ?, ?, 'pending', 0, ?, ?, ?
+    FROM subscription s
+    WHERE s.mailbox_id = ?
+      AND EXISTS (SELECT 1 FROM json_each(s.event_types) WHERE value = 'message.created')
+      AND EXISTS (
+        SELECT 1 FROM service_idempotency_record reservation
+        WHERE reservation.client_id = ? AND reservation.key = ? AND reservation.request_hash = ?
+      )
+  `).bind(agentId, messageId, routingKey, occurredAt, occurredAt, occurredAt, occurredAt, mailboxId, clientId, idempotencyKey, requestHash)
+}
+
 export async function deliverDueNotifications(
   env: { DB: D1Database; DELIVERY_SECRET_KEY: string },
   transport: NotificationTransport = createHttpNotificationTransport(),

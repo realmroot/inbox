@@ -5,10 +5,12 @@ import { secureHeaders } from 'hono/secure-headers'
 import {
   authenticateAgencyService,
   authenticateAgent,
+  authenticateMessageService,
   type AgentPrincipal,
   type Authenticator,
   type ServiceAuthenticator,
   type ServicePrincipal,
+  type MessageAuthenticator,
 } from './auth'
 import { createRealmrootAgentDirectory, type AgentDirectory } from './agent-directory'
 import { ApiError, badRequest } from './errors'
@@ -23,6 +25,7 @@ import {
 } from './subscriptions'
 import {
   createMessage,
+  createServiceMessage,
   getAttachment,
   getMessage,
   getOrCreateMailbox,
@@ -46,13 +49,17 @@ import {
 
 type AppEnv = {
   Bindings: Cloudflare.Env
-  Variables: { requestId: string; principal: AgentPrincipal; servicePrincipal: ServicePrincipal }
+  Variables: { requestId: string; principal: AgentPrincipal; servicePrincipal: ServicePrincipal; messagePrincipal: AgentPrincipal | ServicePrincipal }
 }
 
 export function createApp(
   authenticate: Authenticator = authenticateAgent,
   agentDirectory: (env: Cloudflare.Env) => AgentDirectory = (env) => createRealmrootAgentDirectory(env.REALMROOT),
   authenticateService: ServiceAuthenticator = authenticateAgencyService,
+  authenticateMessages: MessageAuthenticator = async (request, env, operationId) =>
+    /^Bearer\s+/i.test(request.headers.get('authorization') ?? '')
+      ? authenticateMessageService(request, env, operationId)
+      : authenticate(request, env, operationId),
 ) {
   const app = new Hono<AppEnv>()
 
@@ -131,21 +138,14 @@ export function createApp(
     }
     return c.json(result)
   })
-  app.post('/api/messages', authorize(authenticate, operations.createMessage.operationId), async (c) => {
+  app.post('/api/messages', authorizeMessage(authenticateMessages, operations.createMessage.operationId), async (c) => {
     const key = c.req.header('Idempotency-Key')
     if (!key || key.length < 8 || key.length > 200) throw badRequest('Idempotency-Key must contain 8 to 200 characters.')
     const input = await parseJson(c, createMessageSchema)
-    const mailbox = await currentMailbox(c, agentDirectory(c.env))
-    const result = await createMessage(
-      c.env.DB,
-      mailbox,
-      c.get('principal'),
-      c.env.APP_ORIGIN,
-      input,
-      key,
-      agentDirectory(c.env),
-      c.env.EMAIL_DOMAIN,
-    )
+    const principal = c.get('messagePrincipal')
+    const result = 'agent' in principal
+      ? await createMessage(c.env.DB, await getOrCreateMailbox(c.env.DB, principal, agentDirectory(c.env), c.env.EMAIL_DOMAIN), principal, c.env.APP_ORIGIN, input, key, agentDirectory(c.env), c.env.EMAIL_DOMAIN)
+      : await createServiceMessage(c.env.DB, principal, c.env.APP_ORIGIN, input, key, agentDirectory(c.env), c.env.EMAIL_DOMAIN)
     c.header('Location', `${c.env.APP_ORIGIN}/api/messages/${result.message.id}`)
     c.header('Idempotency-Replayed', result.replayed ? 'true' : 'false')
     return c.json(result.message, result.replayed ? 200 : 201)
@@ -238,6 +238,13 @@ function authorize(authenticate: Authenticator, operationId: OperationId) {
 function authorizeService(authenticate: ServiceAuthenticator, operationId: OperationId) {
   return async (c: Context<AppEnv>, next: Next) => {
     c.set('servicePrincipal', await authenticate(c.req.raw, c.env, operationId))
+    await next()
+  }
+}
+
+function authorizeMessage(authenticate: MessageAuthenticator, operationId: OperationId) {
+  return async (c: Context<AppEnv>, next: Next) => {
+    c.set('messagePrincipal', await authenticate(c.req.raw, c.env, operationId))
     await next()
   }
 }

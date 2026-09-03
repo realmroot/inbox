@@ -38,6 +38,14 @@ export type ServiceAuthenticator = (
   operationId: OperationId,
 ) => Promise<ServicePrincipal>
 
+export type MessagePrincipal = AgentPrincipal | ServicePrincipal
+
+export type MessageAuthenticator = (
+  request: Request,
+  env: Cloudflare.Env,
+  operationId: OperationId,
+) => Promise<MessagePrincipal>
+
 export const authenticateAgent: Authenticator = async (request, env, operationId) => {
   const requiredScope = operationPolicy(operationId).scope
   const token = authorizationToken(request)
@@ -79,6 +87,26 @@ export const authenticateAgencyService: ServiceAuthenticator = async (request, e
   })
   if (protectedHeader.typ !== 'at+jwt') throw serviceUnauthorized('Agency service access token type is invalid.')
   return resolveAgencyService(payload, env, requiredScope)
+}
+
+export const authenticateMessageService: ServiceAuthenticator = async (request, env, operationId) => {
+  const requiredScope = operationPolicy(operationId).scope
+  const match = request.headers.get('authorization')?.match(/^Bearer\s+(.+)$/i)
+  if (!match?.[1]) throw serviceUnauthorized('Realmroot Bearer access token is required.')
+  const { payload, protectedHeader } = await jwtVerify(match[1], await keySet(env), {
+    issuer: env.OIDC_ISSUER,
+    audience: `${env.APP_ORIGIN}/api`,
+    algorithms: ['EdDSA', 'ES256', 'RS256'],
+  }).catch(() => {
+    throw serviceUnauthorized('Service access token is invalid.')
+  })
+  if (protectedHeader.typ !== 'at+jwt') throw serviceUnauthorized('Service access token type is invalid.')
+  if (typeof payload.sub !== 'string' || typeof payload.client_id !== 'string' || payload.act !== undefined || payload.cnf !== undefined) {
+    throw serviceUnauthorized('Service identity is invalid.')
+  }
+  const grantedScopes = typeof payload.scope === 'string' ? payload.scope.split(/\s+/).filter(Boolean) : []
+  if (!grantedScopes.includes(requiredScope)) throw serviceInsufficientScope(requiredScope)
+  return { issuer: env.OIDC_ISSUER, subject: payload.sub, clientId: payload.client_id, scopes: grantedScopes }
 }
 
 export function resolveAgencyService(

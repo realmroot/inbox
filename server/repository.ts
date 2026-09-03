@@ -1,8 +1,8 @@
-import type { AgentPrincipal } from './auth'
+import type { AgentPrincipal, ServicePrincipal } from './auth'
 import type { AgentDirectory, AgentIdentity } from './agent-directory'
 import type { CreateMessageInput, UpdateMailboxInput, UpdateMessageInput } from '../shared/contracts'
 import { conflict, forbidden, notFound, preconditionFailed, preconditionRequired } from './errors'
-import { enqueueNotificationStatement } from './notifications'
+import { enqueueNotificationStatement, enqueueServiceNotificationStatement } from './notifications'
 
 export interface Mailbox {
   id: string
@@ -63,7 +63,7 @@ export interface MessageRepresentation {
   id: string
   direction: 'inbound' | 'outbound' | 'both'
   state: 'unread' | 'read' | 'archived' | null
-  sender: { kind: 'agent' | 'email'; address: string }
+  sender: { kind: 'agent' | 'email' | 'service'; address: string }
   recipients: Array<{ address: string; deliveryStatus: 'pending' | 'delivered' | 'failed' }>
   subject: string | null
   content: { text?: string; html?: string }
@@ -223,6 +223,91 @@ export async function createMessage(
   return { message: await getMessage(db, sender.id, record.message_id, origin), replayed: record.message_id !== id }
 }
 
+export async function createServiceMessage(
+  db: D1Database,
+  principal: ServicePrincipal,
+  origin: string,
+  input: CreateMessageInput,
+  idempotencyKey: string,
+  agentDirectory: AgentDirectory,
+  emailDomain: string,
+) {
+  const requestHash = await digest(JSON.stringify(input), 64)
+  const id = `msg_${await digest(`${principal.clientId}\n${idempotencyKey}`, 32)}`
+  const existing = await db.prepare('SELECT request_hash, message_id FROM service_idempotency_record WHERE client_id = ? AND key = ?')
+    .bind(principal.clientId, idempotencyKey).first<{ request_hash: string; message_id: string }>()
+  if (existing) {
+    if (existing.request_hash !== requestHash) throw conflict('The Idempotency-Key was already used with different content.')
+    return { message: await getServiceMessage(db, existing.message_id, origin), replayed: true }
+  }
+  if (input.inReplyTo) throw forbidden('Service Messages cannot reply to mailbox-private Messages.')
+
+  const recipientSubjects = [...new Set(input.recipients.map((address) => address.slice('agent:'.length)))]
+  const recipients: Mailbox[] = []
+  for (const subject of recipientSubjects) {
+    let recipient = await mailboxByAgent(db, principal.issuer, subject)
+    if (!recipient) {
+      const identity = await agentDirectory.find(principal.issuer, subject)
+      if (!identity) throw notFound(`Recipient agent:${subject} does not exist.`)
+      recipient = await getOrCreateMailboxForAgent(db, identity, emailDomain)
+    }
+    recipients.push(recipient)
+  }
+  const now = new Date().toISOString()
+  const results = await db.batch([
+    db.prepare(`
+      INSERT OR IGNORE INTO service_idempotency_record (client_id, key, request_hash, message_id, created_at)
+      VALUES (?, ?, ?, ?, ?)
+    `).bind(principal.clientId, idempotencyKey, requestHash, id, now),
+    db.prepare(`
+      INSERT OR IGNORE INTO message
+        (id, sender_mailbox_id, sender_kind, sender_address, subject, text_content, html_content,
+         in_reply_to, routing_key, transport, accepted_at, created_at)
+      SELECT ?, NULL, 'agent', ?, ?, ?, ?, NULL, ?, 'agent', ?, ?
+      WHERE EXISTS (
+        SELECT 1 FROM service_idempotency_record reservation
+        WHERE reservation.client_id = ? AND reservation.key = ? AND reservation.request_hash = ?
+      )
+    `).bind(id, `service:${principal.clientId}`, input.subject ?? null, input.content.text ?? null, input.content.html ?? null, input.routingKey ?? null, now, now, principal.clientId, idempotencyKey, requestHash),
+    db.prepare(`
+      INSERT OR IGNORE INTO service_message_sender (message_id, client_id)
+      SELECT ?, ?
+      WHERE EXISTS (
+        SELECT 1 FROM service_idempotency_record reservation
+        WHERE reservation.client_id = ? AND reservation.key = ? AND reservation.request_hash = ?
+      )
+    `).bind(id, principal.clientId, principal.clientId, idempotencyKey, requestHash),
+    ...recipients.map((recipient) => db.prepare(`
+      INSERT OR IGNORE INTO message_recipient
+        (message_id, mailbox_id, address, state, delivery_status, received_at)
+      SELECT ?, ?, ?, 'unread', 'delivered', ?
+      WHERE EXISTS (
+        SELECT 1 FROM service_idempotency_record reservation
+        WHERE reservation.client_id = ? AND reservation.key = ? AND reservation.request_hash = ?
+      )
+    `).bind(id, recipient.id, `agent:${recipient.agentSubject}`, now, principal.clientId, idempotencyKey, requestHash)),
+    ...recipients.map((recipient) => enqueueServiceNotificationStatement(
+      db, recipient.id, recipient.agentSubject, id, input.routingKey ?? null, now,
+      principal.clientId, idempotencyKey, requestHash,
+    )),
+  ])
+  const record = await db.prepare('SELECT request_hash, message_id FROM service_idempotency_record WHERE client_id = ? AND key = ?')
+    .bind(principal.clientId, idempotencyKey).first<{ request_hash: string; message_id: string }>()
+  if (!record || record.request_hash !== requestHash) throw conflict('The Idempotency-Key was concurrently used with different content.')
+  return { message: await getServiceMessage(db, record.message_id, origin), replayed: (results[0]?.meta.changes ?? 0) !== 1 }
+}
+
+async function getServiceMessage(db: D1Database, messageId: string, origin: string) {
+  const row = await db.prepare(`
+    SELECT m.*, 'outbound' AS direction, NULL AS state, NULL AS recipient_version
+    FROM message m
+    JOIN service_message_sender service_sender ON service_sender.message_id = m.id
+    WHERE m.id = ? AND service_sender.client_id IS NOT NULL AND m.accepted_at IS NOT NULL
+  `).bind(messageId).first<MessageRow>()
+  if (!row) throw notFound('Message not found.')
+  return representMessage(db, row, origin)
+}
+
 export async function listMessages(
   db: D1Database,
   mailboxId: string,
@@ -352,7 +437,7 @@ async function representMessage(db: D1Database, row: MessageRow, origin: string)
     id: row.id,
     direction: row.direction,
     state: row.state,
-    sender: { kind: row.sender_kind, address: row.sender_address },
+    sender: { kind: isServiceSender(row) ? 'service' : row.sender_kind, address: row.sender_address },
     recipients: recipientResult.results.map((recipient) => ({ address: recipient.address, deliveryStatus: recipient.delivery_status })),
     subject: row.subject,
     content: {
@@ -374,6 +459,10 @@ async function representMessage(db: D1Database, row: MessageRow, origin: string)
     createdAt: row.created_at,
     links: { self: `${origin}/api/messages/${row.id}`, mailbox: `${origin}/api/mailbox` },
   }
+}
+
+function isServiceSender(row: MessageRow): boolean {
+  return row.sender_mailbox_id === null && row.sender_address.startsWith('service:')
 }
 
 function mailbox(row: MailboxRow): Mailbox {

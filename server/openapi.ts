@@ -17,7 +17,7 @@ export function openApi(origin: string, issuer: string) {
       id: { type: 'string', pattern: '^msg_' },
       direction: { type: 'string', enum: ['inbound', 'outbound', 'both'] },
       state: { type: ['string', 'null'], enum: ['unread', 'read', 'archived', null] },
-      sender: { type: 'object', required: ['kind', 'address'], properties: { kind: { type: 'string', enum: ['agent', 'email'] }, address: { type: 'string' } } },
+      sender: { type: 'object', required: ['kind', 'address'], properties: { kind: { type: 'string', enum: ['agent', 'email', 'service'] }, address: { type: 'string' } } },
       recipients: { type: 'array', items: { type: 'object', required: ['address', 'deliveryStatus'], properties: { address: { type: 'string' }, deliveryStatus: { type: 'string', enum: ['pending', 'delivered', 'failed'] } } } },
       subject: { type: ['string', 'null'] },
       content: { type: 'object', properties: { text: { type: 'string' }, html: { type: 'string' } } },
@@ -68,7 +68,7 @@ export function openApi(origin: string, issuer: string) {
           responses: { 200: { description: 'Messages visible to the current mailbox.', headers: { Link: { $ref: '#/components/headers/Link' }, ...protectedResponseHeaders }, content: { 'application/json': { schema: { type: 'object', required: ['items', 'pagination'], properties: { items: { type: 'array', items: { $ref: '#/components/schemas/Message' } }, pagination: { $ref: '#/components/schemas/Pagination' } } } } } }, ...errors },
         },
         post: {
-          operationId: 'createMessage', tags: ['message'], 'x-cli-name': 'send', security: security(scopes.messagesCreate),
+          operationId: 'createMessage', tags: ['message'], 'x-cli-name': 'send', security: [...security(scopes.messagesCreate), ...serviceSecurity(scopes.messagesCreate)],
           parameters: [version, { name: 'Idempotency-Key', in: 'header', required: true, schema: { type: 'string', minLength: 8, maxLength: 200 } }],
           requestBody: { required: true, content: { 'application/json': { schema: { $ref: '#/components/schemas/CreateMessage' } } } },
           responses: {
@@ -146,7 +146,7 @@ export function openApi(origin: string, issuer: string) {
         },
         RealmrootServiceOAuth: {
           type: 'oauth2', flows: { clientCredentials: { tokenUrl: `${issuer}/oauth2/token`, scopes: scopeCatalog } },
-          description: 'Realmroot Bearer access token for the configured Agency M2M service identity. This authority manages Subscriptions only and does not grant Message access.',
+          description: 'Realmroot Bearer access token for machine Applications. Agency subscription operations remain restricted to the configured Agency client; messages:create permits an authorized Application to send service Messages.',
         },
       },
       parameters: {
