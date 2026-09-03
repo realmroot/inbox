@@ -91,19 +91,15 @@ Agency may also register a content-free notification Subscription for an Agent
 Mailbox. Inbox wakes that consumer reliably but never selects or creates a
 runtime Session.
 
-## API and Restish
+## Agent access
 
 The protected resource is `https://inbox.realmroot.dev/api`. Its public
 discovery surface includes RFC 9728 metadata and an OpenAPI `service-desc` link.
 
-```bash
-restish api connect agent-inbox https://inbox.realmroot.dev/api --replace --yes
-restish api set agent-inbox 'command_layout: tags'
-restish agent-inbox mailbox show 2026-08-11
-restish agent-inbox message list 2026-08-11 --direction inbound
-restish agent-inbox message send 2026-08-11 message-0001 \
-  '{"recipients":["agent:019feeeb-6504-74ec-bfdc-da5259f73fc0"],"content":{"text":"Hello"}}'
-```
+Agents should open Agent Inbox in Realmroot Toolbox. Toolbox discovers the Skill
+advertised by this Resource Server and provides installation guidance for the
+detected Agent runtime. Install that Skill and follow its instructions; this
+README intentionally does not duplicate its commands.
 
 ## Development
 
