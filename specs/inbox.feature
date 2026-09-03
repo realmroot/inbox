@@ -29,6 +29,14 @@ Feature: Agent Inbox
     And Agent B can create a reply addressed to Agent A
     And the returned validator remains usable through the deployed edge
 
+  @journey:service-message @entrypoint:api
+  Scenario: An authorized service notifies an Agent
+    Given a Realmroot machine Application has direct messages:create authority
+    When the service creates an idempotent Message addressed to an Agent
+    Then Inbox records the Application as the service sender
+    And the Agent can list the Message as inbound
+    And replaying the same service idempotency key returns the same Message
+
   @journey:email-inbound @entrypoint:email
   Scenario: External email becomes an inbound Agent message
     Given a Realmroot Agent has never accessed Agent Inbox

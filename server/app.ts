@@ -3,11 +3,11 @@ import { bodyLimit } from 'hono/body-limit'
 import { cors } from 'hono/cors'
 import { secureHeaders } from 'hono/secure-headers'
 import {
-  authenticateAgencyService,
-  authenticateAgent,
+  authenticatePrincipal,
+  authorizePrincipal,
   type AgentPrincipal,
   type Authenticator,
-  type ServiceAuthenticator,
+  type Principal,
   type ServicePrincipal,
 } from './auth'
 import { createRealmrootAgentDirectory, type AgentDirectory } from './agent-directory'
@@ -23,6 +23,7 @@ import {
 } from './subscriptions'
 import {
   createMessage,
+  createServiceMessage,
   getAttachment,
   getMessage,
   getOrCreateMailbox,
@@ -46,13 +47,12 @@ import {
 
 type AppEnv = {
   Bindings: Cloudflare.Env
-  Variables: { requestId: string; principal: AgentPrincipal; servicePrincipal: ServicePrincipal }
+  Variables: { requestId: string; principal: Principal }
 }
 
 export function createApp(
-  authenticate: Authenticator = authenticateAgent,
+  authenticate: Authenticator = authenticatePrincipal,
   agentDirectory: (env: Cloudflare.Env) => AgentDirectory = (env) => createRealmrootAgentDirectory(env.REALMROOT),
-  authenticateService: ServiceAuthenticator = authenticateAgencyService,
 ) {
   const app = new Hono<AppEnv>()
 
@@ -135,17 +135,10 @@ export function createApp(
     const key = c.req.header('Idempotency-Key')
     if (!key || key.length < 8 || key.length > 200) throw badRequest('Idempotency-Key must contain 8 to 200 characters.')
     const input = await parseJson(c, createMessageSchema)
-    const mailbox = await currentMailbox(c, agentDirectory(c.env))
-    const result = await createMessage(
-      c.env.DB,
-      mailbox,
-      c.get('principal'),
-      c.env.APP_ORIGIN,
-      input,
-      key,
-      agentDirectory(c.env),
-      c.env.EMAIL_DOMAIN,
-    )
+    const principal = c.get('principal')
+    const result = principal.kind === 'agent'
+      ? await createMessage(c.env.DB, await getOrCreateMailbox(c.env.DB, principal, agentDirectory(c.env), c.env.EMAIL_DOMAIN), principal, c.env.APP_ORIGIN, input, key, agentDirectory(c.env), c.env.EMAIL_DOMAIN)
+      : await createServiceMessage(c.env.DB, principal, c.env.APP_ORIGIN, input, key, agentDirectory(c.env), c.env.EMAIL_DOMAIN)
     c.header('Location', `${c.env.APP_ORIGIN}/api/messages/${result.message.id}`)
     c.header('Idempotency-Replayed', result.replayed ? 'true' : 'false')
     return c.json(result.message, result.replayed ? 200 : 201)
@@ -176,10 +169,10 @@ export function createApp(
     return new Response(object.body, { headers })
   })
 
-  app.get('/api/subscriptions', authorizeService(authenticateService, operations.listSubscriptions.operationId), async (c) => {
+  app.get('/api/subscriptions', authorize(authenticate, operations.listSubscriptions.operationId), async (c) => {
     const parsed = listSubscriptionsQuerySchema.safeParse(c.req.query())
     if (!parsed.success) throw badRequest(parsed.error.issues.map((issue) => issue.message).join('; '))
-    const result = await listSubscriptions(c.env.DB, c.get('servicePrincipal'), c.env.APP_ORIGIN, parsed.data)
+    const result = await listSubscriptions(c.env.DB, servicePrincipal(c), c.env.APP_ORIGIN, parsed.data)
     if (result.pagination.nextPageToken) {
       const next = new URL(c.req.url)
       next.searchParams.set('pageToken', result.pagination.nextPageToken)
@@ -187,18 +180,18 @@ export function createApp(
     }
     return c.json(result)
   })
-  app.get('/api/subscriptions/:subscriptionId', authorizeService(authenticateService, operations.getSubscription.operationId), async (c) => {
+  app.get('/api/subscriptions/:subscriptionId', authorize(authenticate, operations.getSubscription.operationId), async (c) => {
     const subscriptionId = parsedSubscriptionId(c)
-    const result = await getSubscription(c.env.DB, c.get('servicePrincipal'), subscriptionId, c.env.APP_ORIGIN)
+    const result = await getSubscription(c.env.DB, servicePrincipal(c), subscriptionId, c.env.APP_ORIGIN)
     c.header('ETag', result.etag)
     return c.json(result.subscription)
   })
-  app.put('/api/subscriptions/:subscriptionId', authorizeService(authenticateService, operations.replaceSubscription.operationId), async (c) => {
+  app.put('/api/subscriptions/:subscriptionId', authorize(authenticate, operations.replaceSubscription.operationId), async (c) => {
     const subscriptionId = parsedSubscriptionId(c)
     const input = await parseJson(c, replaceSubscriptionSchema)
     const result = await replaceSubscription(
       c.env.DB,
-      c.get('servicePrincipal'),
+      servicePrincipal(c),
       subscriptionId,
       input,
       c.req.header('If-Match'),
@@ -212,8 +205,8 @@ export function createApp(
     c.header('Location', `${c.env.APP_ORIGIN}/api/subscriptions/${subscriptionId}`)
     return c.json(result.subscription, result.created ? 201 : 200)
   })
-  app.delete('/api/subscriptions/:subscriptionId', authorizeService(authenticateService, operations.deleteSubscription.operationId), async (c) => {
-    await deleteSubscription(c.env.DB, c.get('servicePrincipal'), parsedSubscriptionId(c), c.req.header('If-Match'))
+  app.delete('/api/subscriptions/:subscriptionId', authorize(authenticate, operations.deleteSubscription.operationId), async (c) => {
+    await deleteSubscription(c.env.DB, servicePrincipal(c), parsedSubscriptionId(c), c.req.header('If-Match'))
     return c.body(null, 204)
   })
 
@@ -230,14 +223,9 @@ export function createApp(
 
 function authorize(authenticate: Authenticator, operationId: OperationId) {
   return async (c: Context<AppEnv>, next: Next) => {
-    c.set('principal', await authenticate(c.req.raw, c.env, operationId))
-    await next()
-  }
-}
-
-function authorizeService(authenticate: ServiceAuthenticator, operationId: OperationId) {
-  return async (c: Context<AppEnv>, next: Next) => {
-    c.set('servicePrincipal', await authenticate(c.req.raw, c.env, operationId))
+    const principal = await authenticate(c.req.raw, c.env)
+    authorizePrincipal(principal, c.env, operationId)
+    c.set('principal', principal)
     await next()
   }
 }
@@ -252,7 +240,19 @@ async function versionMiddleware(c: Context<AppEnv>, next: Next) {
 }
 
 async function currentMailbox(c: Context<AppEnv>, directory: AgentDirectory) {
-  return getOrCreateMailbox(c.env.DB, c.get('principal'), directory, c.env.EMAIL_DOMAIN)
+  return getOrCreateMailbox(c.env.DB, agentPrincipal(c), directory, c.env.EMAIL_DOMAIN)
+}
+
+function agentPrincipal(c: Context<AppEnv>): AgentPrincipal {
+  const principal = c.get('principal')
+  if (principal.kind !== 'agent') throw new Error('Agent authorization invariant was not enforced.')
+  return principal
+}
+
+function servicePrincipal(c: Context<AppEnv>): ServicePrincipal {
+  const principal = c.get('principal')
+  if (principal.kind !== 'service') throw new Error('Service authorization invariant was not enforced.')
+  return principal
 }
 
 async function parseJson<T>(c: Context<AppEnv>, schema: { safeParse(value: unknown): { success: true; data: T } | { success: false; error: { issues: Array<{ message: string }> } } }) {
